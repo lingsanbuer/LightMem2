@@ -1,3 +1,10 @@
+# EcoClaw (Node/TS monorepo)
+node_modules/
+dist/
+coverage/
+.pnpm-store/
+*.tsbuildinfo
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
