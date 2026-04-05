@@ -22,6 +22,10 @@ export type PolicyModuleConfig = {
   localityStructuralPayloadMinChars?: number;
   localityErrorMinChars?: number;
   localitySubtaskBoundaryMinMessages?: number;
+  // Turn-local compaction config
+  turnLocalCompactionEnabled?: boolean;
+  turnLocalCompactionDelayTurns?: number;
+  turnLocalCompactionMinChars?: number;
   summaryGenerationMode?: "llm_full_context" | "heuristic";
   summaryMaxOutputTokens?: number;
   handoffEnabled?: boolean;
@@ -74,6 +78,11 @@ export type PolicyOnlineConfigSnapshot = {
   compaction: {
     enabled: boolean;
     cooldownTurns: number;
+  };
+  turnLocal: {
+    enabled: boolean;
+    delayTurns: number;
+    minChars: number;
   };
   cache: {
     telemetryWindowTurns: number;
@@ -239,6 +248,8 @@ export type PolicyLocalityDecision = {
   handoffCandidateMessageIds: string[];
   errorCandidateMessageIds: string[];
   compactionCandidateBranchIds: string[];
+  turnLocalCandidateMessageIds: string[];
+  turnLocalDelayTurns: number;
   signals: PolicyLocalitySignal[];
 };
 

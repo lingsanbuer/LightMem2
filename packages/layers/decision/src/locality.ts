@@ -1,5 +1,6 @@
 import type { ContextViewMessageSnapshot, ContextViewSnapshot } from "@ecoclaw/layer-context";
 import type { RuntimeTurnContext } from "@ecoclaw/kernel";
+import { createHash } from "node:crypto";
 
 export type LocalitySignalScope = "session" | "branch" | "message";
 export type LocalityActionHint =
@@ -17,6 +18,7 @@ export type PolicyLocalitySignalKind =
   | "subtask_boundary"
   | "error_detected"
   | "structural_payload_detected"
+  | "repeated_read_detected"
   | (string & {});
 
 export type PolicyLocalitySignalTargets = {
@@ -37,6 +39,11 @@ export type PolicyLocalitySignalEvidence = {
   similarityToPreviousUser?: number;
   transition?: boolean;
   completion?: boolean;
+  // For repeated_read_detected signal
+  readPath?: string;
+  contentHash?: string;
+  firstReadIndex?: number;
+  delayTurns?: number;
 };
 
 export type PolicyLocalitySignalCost = {
@@ -67,6 +74,10 @@ export type PolicyLocalityConfig = {
   structuralPayloadMinChars: number;
   errorMinChars: number;
   subtaskBoundaryMinMessages: number;
+  // Turn-local compaction config
+  turnLocalCompactionEnabled?: boolean;
+  turnLocalCompactionDelayTurns?: number; // Number of turns to wait before compacting (0 = immediate)
+  turnLocalCompactionMinChars?: number;
 };
 
 export type PolicyLocalityAnalysis = {
@@ -93,6 +104,10 @@ export type PolicyLocalityAnalysis = {
   errorCandidateMessageIds: string[];
   compactionCandidateBranchIds: string[];
   compactionCandidateReplayChars: number;
+  // Turn-local compaction candidates
+  turnLocalCandidateMessageIds: string[];
+  turnLocalCandidateChars: number;
+  turnLocalDelayTurns: number;
   signals: PolicyLocalitySignal[];
   notes: string[];
 };
@@ -647,6 +662,90 @@ function buildSubtaskBoundarySignals(
   ];
 }
 
+function hashText(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function readReadPath(message: ContextViewMessageSnapshot): string | undefined {
+  const metadata = asRecord(message.metadata);
+  const toolPayload = asRecord(metadata?.toolPayload);
+  const candidates = [toolPayload?.path, toolPayload?.file_path, metadata?.path, metadata?.file_path];
+  const match = candidates.find((candidate) => typeof candidate === "string" && candidate.trim().length > 0);
+  return typeof match === "string" ? match.trim() : undefined;
+}
+
+function buildRepeatedReadSignals(
+  messages: ContextViewMessageSnapshot[],
+  cfg: PolicyLocalityConfig,
+): PolicyLocalitySignal[] {
+  if (!cfg.turnLocalCompactionEnabled) return [];
+
+  const signals: PolicyLocalitySignal[] = [];
+  const minChars = cfg.turnLocalCompactionMinChars ?? 500;
+
+  // Group reads by path + content hash
+  const readsByKey = new Map<string, { index: number; messageId: string; path?: string; contentHash: string; chars: number }[]>();
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    if (message.role !== "tool" && message.role !== "toolResult") continue;
+
+    const toolName = readToolName(message);
+    if (toolName !== "read" && toolName !== "exec") continue;
+
+    const readPath = readReadPath(message);
+    const contentHash = hashText(message.content);
+    const key = `${readPath ?? "unknown"}:${contentHash}`;
+
+    const existing = readsByKey.get(key) ?? [];
+    existing.push({
+      index: i,
+      messageId: message.messageId,
+      path: readPath,
+      contentHash,
+      chars: message.chars,
+    });
+    readsByKey.set(key, existing);
+  }
+
+  // For each group of repeated reads with same content, mark all but the first as compact candidates
+  for (const [key, reads] of readsByKey.entries()) {
+    if (reads.length <= 1) continue; // No repeated reads
+
+    // Check if total chars saved would be significant
+    const totalSavedChars = reads.slice(1).reduce((sum, r) => sum + r.chars, 0);
+    if (totalSavedChars < minChars) continue;
+
+    const delayTurns = cfg.turnLocalCompactionDelayTurns ?? 0;
+
+    signals.push({
+      id: `repeated-read:${key.slice(0, 48)}`,
+      kind: "repeated_read_detected",
+      scope: "message",
+      score: 0.85,
+      confidence: "high",
+      actionHints: ["compaction"],
+      targets: { messageIds: reads.slice(1).map((r) => r.messageId) },
+      rationale: `Same content was read ${reads.length} times; keeping first read, compacting ${reads.length - 1} duplicates after ${delayTurns} turn delay`,
+      evidence: {
+        toolName: "read",
+        repeats: reads.length,
+        readPath: reads[0]?.path,
+        contentHash: reads[0]?.contentHash,
+        firstReadIndex: reads[0]?.index,
+        delayTurns,
+      },
+      cost: {
+        chars: totalSavedChars,
+        approxTokens: estimateTokens(totalSavedChars),
+        messageCount: reads.length - 1,
+      },
+    });
+  }
+
+  return signals;
+}
+
 function collectMessageTargets(
   signals: PolicyLocalitySignal[],
   hint: LocalityActionHint,
@@ -703,6 +802,9 @@ export function analyzePolicyLocality(params: {
     errorCandidateMessageIds: [],
     compactionCandidateBranchIds: [],
     compactionCandidateReplayChars: 0,
+    turnLocalCandidateMessageIds: [],
+    turnLocalCandidateChars: 0,
+    turnLocalDelayTurns: cfg.turnLocalCompactionDelayTurns ?? 0,
     signals: [],
     notes: cfg.enabled ? ["context_view_unavailable"] : ["locality_disabled"],
   };
@@ -718,6 +820,7 @@ export function analyzePolicyLocality(params: {
   signals.push(...buildErrorSignals(messages, cfg));
   signals.push(...buildHardLoopSignals(messages, cfg));
   signals.push(...buildSubtaskBoundarySignals(messages, cfg, contextView.activeBranchId));
+  signals.push(...buildRepeatedReadSignals(messages, cfg));
 
   const messagesById = messageMap(messages);
   const protectedMessageIds = collectMessageTargets(signals, "protect");
@@ -737,6 +840,14 @@ export function analyzePolicyLocality(params: {
   );
   const compactionCandidateBranchIds = collectBranchTargets(signals, "compaction");
   const compactionCandidateMessageIds = collectMessageTargets(signals, "compaction");
+  const turnLocalCandidateMessageIds = collectMessageTargets(signals, "compaction").filter(
+    (messageId) => {
+      // Filter to only include message ids from repeated_read_detected signals
+      const signal = signals.find((s) => s.kind === "repeated_read_detected" && s.targets.messageIds?.includes(messageId));
+      return !!signal;
+    }
+  );
+  const turnLocalCandidateChars = sumMessageChars(turnLocalCandidateMessageIds, messagesById);
 
   const protectedChars = sumMessageChars(protectedMessageIds, messagesById);
   const summaryCandidateChars = sumMessageChars(summaryCandidateMessageIds, messagesById);
@@ -784,11 +895,16 @@ export function analyzePolicyLocality(params: {
     errorCandidateMessageIds,
     compactionCandidateBranchIds,
     compactionCandidateReplayChars,
+    turnLocalCandidateMessageIds,
+    turnLocalCandidateChars,
+    turnLocalDelayTurns: cfg.turnLocalCompactionDelayTurns ?? 0,
     signals,
     notes: [
       `active_replay_messages=${messages.length}`,
       `active_replay_chars=${activeReplayChars}`,
       `stable_prefix_chars=${stablePrefixChars}`,
+      `turn_local_candidates=${turnLocalCandidateMessageIds.length}`,
+      `turn_local_delay_turns=${cfg.turnLocalCompactionDelayTurns ?? 0}`,
       ...[...signalKindCounts.entries()].map(([kind, count]) => `signal.${kind}=${count}`),
     ],
   };
