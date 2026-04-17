@@ -70,7 +70,10 @@ export const pathTruncationPass: ReductionPassHandler = {
 
     // Get max path length from instruction parameters or spec
     const instrParams = pathTruncationInstructions[0]?.parameters ?? {};
-    const maxLength = (instrParams.maxPathLength as number) ?? 80;
+    const maxLength =
+      (instrParams.maxPathLength as number)
+      ?? (typeof spec.options?.maxPathLength === "number" ? spec.options.maxPathLength : undefined)
+      ?? 80;
 
     const { content, changed, truncatedCount } = applyPathTruncation(
       currentResult.content,

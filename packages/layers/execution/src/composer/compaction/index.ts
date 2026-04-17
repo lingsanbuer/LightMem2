@@ -11,21 +11,12 @@
 // Shared types & config
 export * from "./types.js";
 
-// Compaction executor layer
-export * from "./turn-local/index.js";
-
-// Legacy session-global exports kept for compatibility with existing tests/tools.
-// Runtime path is no longer wired through session-global compaction.
-export {
-  buildCompactionPlan,
-} from "./session-global/plan-builder.js";
-export {
-  generateCompactionArtifact,
-} from "./session-global/index.js";
+// Compaction executor layer (flattened from turn-local/)
+export * from "./turn-local-compaction.js";
 
 import type { RuntimeModule } from "@ecoclaw/kernel";
 import type { CompactionModuleConfig } from "./types.js";
-import { runTurnLocalEvidenceCompaction } from "./turn-local/index.js";
+import { runTurnLocalEvidenceCompaction } from "./turn-local-compaction.js";
 
 export function createCompactionModule(cfg: CompactionModuleConfig = {}): RuntimeModule {
   return {

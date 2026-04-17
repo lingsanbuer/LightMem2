@@ -1,5 +1,10 @@
 import type { ContextSegment, RuntimeTurnContext } from "@ecoclaw/kernel";
 import type { ReductionPassHandler } from "../../composer/reduction/types.js";
+import {
+  archiveContent,
+  buildArchiveLocation,
+  buildRecoveryHint,
+} from "../archive-recovery/index.js";
 
 const DEFAULT_MAX_CHARS = 1200;
 const DEFAULT_HEAD_LINES = 8;
@@ -253,8 +258,44 @@ const reduceSegment = (
 const asObject = (value: unknown): Record<string, unknown> | undefined =>
   !value || typeof value !== "object" || Array.isArray(value) ? undefined : value as Record<string, unknown>;
 
+const extractDataKey = (segment: ContextSegment): string => {
+  const meta = asObject(segment.metadata);
+  const toolPayload = asObject(meta?.toolPayload);
+  const candidates = [
+    meta?.path,
+    meta?.file_path,
+    meta?.filePath,
+    toolPayload?.path,
+    toolPayload?.file_path,
+    toolPayload?.filePath,
+  ];
+  for (const value of candidates) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return `segment:${segment.id}`;
+};
+
+const extractToolName = (segment: ContextSegment): string => {
+  const meta = asObject(segment.metadata);
+  const toolPayload = asObject(meta?.toolPayload);
+  const candidates = [
+    meta?.toolName,
+    toolPayload?.toolName,
+    toolPayload?.tool_name,
+    meta?.name,
+  ];
+  for (const value of candidates) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 0) return trimmed.toLowerCase();
+  }
+  return "tool";
+};
+
 export const toolPayloadTrimPass: ReductionPassHandler = {
-  beforeCall({ turnCtx, spec }) {
+  async beforeCall({ turnCtx, spec }) {
     const cfg = resolveConfig(spec.options);
 
     // Check if policy provided instructions for this strategy
@@ -300,19 +341,60 @@ export const toolPayloadTrimPass: ReductionPassHandler = {
     const touchedSegmentIds: string[] = [];
     const reducedKinds = new Set<PayloadKind>();
 
-    const nextSegments = turnCtx.segments.map((segment) => {
+    const workspaceDir =
+      typeof turnCtx.metadata?.workspaceDir === "string"
+        ? turnCtx.metadata.workspaceDir
+        : undefined;
+    const archivePaths: string[] = [];
+    let skippedNoNetSavings = 0;
+    const nextSegments = await Promise.all(turnCtx.segments.map(async (segment) => {
       const entry = segmentMap.get(segment.id);
       if (!entry) return segment;
 
       const reduced = reduceSegment(segment, cfg, entry.payloadKind);
       if (!reduced.changed) return segment;
 
+      const dataKey = extractDataKey(segment);
+      const toolName = extractToolName(segment);
+      const { archivePath } = buildArchiveLocation({
+        sessionId: turnCtx.sessionId,
+        segmentId: segment.id,
+        workspaceDir,
+      });
+
+      const replacementText = reduced.text + buildRecoveryHint({
+        dataKey,
+        originalSize: segment.text.length,
+        archivePath,
+        sourceLabel: "Tool payload trimmed",
+      });
+
+      if (replacementText.length >= segment.text.length) {
+        skippedNoNetSavings += 1;
+        return segment;
+      }
+
+      await archiveContent({
+        sessionId: turnCtx.sessionId,
+        segmentId: segment.id,
+        sourcePass: "tool_payload_trim",
+        toolName,
+        dataKey,
+        originalText: segment.text,
+        workspaceDir,
+        metadata: {
+          payloadKind: entry.payloadKind,
+          reducedPreviewChars: reduced.text.length,
+        },
+      });
+
       touchedSegmentIds.push(segment.id);
       reducedKinds.add(entry.payloadKind);
+      archivePaths.push(archivePath);
 
       return {
         ...segment,
-        text: reduced.text,
+        text: replacementText,
         metadata: {
           ...segment.metadata,
           reduction: {
@@ -320,18 +402,20 @@ export const toolPayloadTrimPass: ReductionPassHandler = {
             toolPayloadTrim: {
               reduced: true,
               payloadKind: entry.payloadKind,
+              dataKey,
               originalSize: segment.text.length,
               reducedSize: reduced.text.length,
+              archivePath,
             },
           },
         },
       };
-    });
+    }));
 
     if (touchedSegmentIds.length === 0) {
       return {
         changed: false,
-        skippedReason: "no_segments_reduced",
+        skippedReason: skippedNoNetSavings > 0 ? "no_net_savings" : "no_segments_reduced",
       };
     }
 
@@ -345,6 +429,7 @@ export const toolPayloadTrimPass: ReductionPassHandler = {
       touchedSegmentIds,
       metadata: {
         reducedKinds: [...reducedKinds],
+        archivePaths,
       },
     };
   },

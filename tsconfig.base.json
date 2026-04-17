@@ -27,6 +27,9 @@
                                           "@ecoclaw/layer-decision": [
                                                                           "packages/layers/decision/src/index.ts"
                                                                       ],
+                                          "@ecoclaw/layer-history": [
+                                                                         "packages/layers/history/src/index.ts"
+                                                                     ],
                                           "@ecoclaw/layer-execution": [
                                                                           "packages/layers/execution/src/index.ts"
                                                                       ],

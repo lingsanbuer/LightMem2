@@ -1,17 +1,22 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { readFile, mkdir, appendFile, writeFile } from "node:fs/promises";
 import {
   resolveReductionPasses as resolveLayerReductionPasses,
   runReductionBeforeCall as runLayerReductionBeforeCall,
   runReductionAfterCall as runLayerReductionAfterCall,
-} from "../../layers/execution/src/composer/reduction/pipeline.ts";
-import type { ContextSegment, RuntimeTurnContext, RuntimeTurnResult } from "../../kernel/src/types.ts";
+} from "../../layers/execution/src/composer/reduction/pipeline.js";
+import { createCompactionModule } from "../../layers/execution/src/composer/compaction/index.js";
+import { createEvictionModule } from "../../layers/execution/src/composer/eviction/index.js";
+import { createPolicyModule, type PolicyModuleConfig } from "../../layers/decision/src/policy.js";
+import type { ContextSegment, RuntimeTurnContext, RuntimeTurnResult } from "../../kernel/src/types.js";
+import type { RuntimeModule, RuntimeModuleRuntime } from "../../kernel/src/interfaces.js";
 import {
   prependTextToContent,
   type RootPromptRewrite,
@@ -28,6 +33,19 @@ type EcoClawPluginConfig = {
   debugTapPath?: string;
   proxyAutostart?: boolean;
   proxyPort?: number;
+  proxyMode?: {
+    pureForward?: boolean;
+  };
+  hooks?: {
+    beforeToolCall?: boolean;
+    toolResultPersist?: boolean;
+  };
+  contextEngine?: {
+    enabled?: boolean;
+    pruneThresholdChars?: number;
+    keepRecentToolResults?: number;
+    placeholder?: string;
+  };
   modules?: {
     stabilizer?: boolean;
     policy?: boolean;
@@ -92,6 +110,28 @@ type EcoClawPluginConfig = {
     engine?: "layered";
     triggerMinChars?: number;
     maxToolChars?: number;
+    passes?: {
+      repeatedReadDedup?: boolean;
+      toolPayloadTrim?: boolean;
+      htmlSlimming?: boolean;
+      execOutputTruncation?: boolean;
+      agentsStartupOptimization?: boolean;
+      memoryFaultRecovery?: boolean;
+    };
+    passOptions?: {
+      repeatedReadDedup?: Record<string, unknown>;
+      toolPayloadTrim?: Record<string, unknown>;
+      htmlSlimming?: Record<string, unknown>;
+      execOutputTruncation?: Record<string, unknown>;
+      agentsStartupOptimization?: Record<string, unknown>;
+      memoryFaultRecovery?: Record<string, unknown>;
+      formatSlimming?: Record<string, unknown>;
+      semanticLlmlingua2?: Record<string, unknown>;
+      formatCleaning?: Record<string, unknown>;
+      pathTruncation?: Record<string, unknown>;
+      imageDownsample?: Record<string, unknown>;
+      lineNumberStrip?: Record<string, unknown>;
+    };
   };
 };
 
@@ -359,6 +399,11 @@ function normalizeConfig(raw: unknown): Required<Omit<EcoClawPluginConfig, "prox
   const semantic = cfg.semanticReduction ?? {};
   const semanticEmbedding = semantic.embedding ?? {};
   const reduction = cfg.reduction ?? {};
+  const reductionPasses = reduction.passes ?? {};
+  const reductionPassOptions = reduction.passOptions ?? {};
+  const hooks = cfg.hooks ?? {};
+  const contextEngine = cfg.contextEngine ?? {};
+  const proxyMode = cfg.proxyMode ?? {};
   return {
     enabled: cfg.enabled ?? true,
     logLevel: cfg.logLevel ?? "info",
@@ -369,6 +414,22 @@ function normalizeConfig(raw: unknown): Required<Omit<EcoClawPluginConfig, "prox
     debugTapPath: cfg.debugTapPath ?? join(stateDir, "ecoclaw", "provider-traffic.jsonl"),
     proxyAutostart: cfg.proxyAutostart ?? true,
     proxyPort: Math.max(1025, Math.min(65535, cfg.proxyPort ?? 17667)),
+    proxyMode: {
+      pureForward: proxyMode.pureForward ?? false,
+    },
+    hooks: {
+      beforeToolCall: hooks.beforeToolCall ?? true,
+      toolResultPersist: hooks.toolResultPersist ?? true,
+    },
+    contextEngine: {
+      enabled: contextEngine.enabled ?? true,
+      pruneThresholdChars: Math.max(10_000, contextEngine.pruneThresholdChars ?? 100_000),
+      keepRecentToolResults: Math.max(0, contextEngine.keepRecentToolResults ?? 5),
+      placeholder:
+        typeof contextEngine.placeholder === "string" && contextEngine.placeholder.trim().length > 0
+          ? contextEngine.placeholder
+          : "[pruned]",
+    },
     modules: {
       stabilizer: modules.stabilizer ?? true,
       policy: modules.policy ?? true,
@@ -454,9 +515,67 @@ function normalizeConfig(raw: unknown): Required<Omit<EcoClawPluginConfig, "prox
       },
     },
     reduction: {
-      engine: "layered",
+      engine: "layered" as const,
       triggerMinChars: Math.max(256, reduction.triggerMinChars ?? 2200),
       maxToolChars: Math.max(256, reduction.maxToolChars ?? 1200),
+      passes: {
+        repeatedReadDedup: reductionPasses.repeatedReadDedup ?? true,
+        toolPayloadTrim: reductionPasses.toolPayloadTrim ?? true,
+        htmlSlimming: reductionPasses.htmlSlimming ?? true,
+        execOutputTruncation: reductionPasses.execOutputTruncation ?? true,
+        agentsStartupOptimization: reductionPasses.agentsStartupOptimization ?? true,
+        memoryFaultRecovery: reductionPasses.memoryFaultRecovery ?? true,
+      },
+      passOptions: {
+        repeatedReadDedup:
+          reductionPassOptions.repeatedReadDedup && typeof reductionPassOptions.repeatedReadDedup === "object"
+            ? { ...reductionPassOptions.repeatedReadDedup }
+            : {},
+        toolPayloadTrim:
+          reductionPassOptions.toolPayloadTrim && typeof reductionPassOptions.toolPayloadTrim === "object"
+            ? { ...reductionPassOptions.toolPayloadTrim }
+            : {},
+        htmlSlimming:
+          reductionPassOptions.htmlSlimming && typeof reductionPassOptions.htmlSlimming === "object"
+            ? { ...reductionPassOptions.htmlSlimming }
+            : {},
+        execOutputTruncation:
+          reductionPassOptions.execOutputTruncation && typeof reductionPassOptions.execOutputTruncation === "object"
+            ? { ...reductionPassOptions.execOutputTruncation }
+            : {},
+        agentsStartupOptimization:
+          reductionPassOptions.agentsStartupOptimization && typeof reductionPassOptions.agentsStartupOptimization === "object"
+            ? { ...reductionPassOptions.agentsStartupOptimization }
+            : {},
+        memoryFaultRecovery:
+          reductionPassOptions.memoryFaultRecovery && typeof reductionPassOptions.memoryFaultRecovery === "object"
+            ? { ...reductionPassOptions.memoryFaultRecovery }
+            : {},
+        formatSlimming:
+          reductionPassOptions.formatSlimming && typeof reductionPassOptions.formatSlimming === "object"
+            ? { ...reductionPassOptions.formatSlimming }
+            : {},
+        semanticLlmlingua2:
+          reductionPassOptions.semanticLlmlingua2 && typeof reductionPassOptions.semanticLlmlingua2 === "object"
+            ? { ...reductionPassOptions.semanticLlmlingua2 }
+            : {},
+        formatCleaning:
+          reductionPassOptions.formatCleaning && typeof reductionPassOptions.formatCleaning === "object"
+            ? { ...reductionPassOptions.formatCleaning }
+            : {},
+        pathTruncation:
+          reductionPassOptions.pathTruncation && typeof reductionPassOptions.pathTruncation === "object"
+            ? { ...reductionPassOptions.pathTruncation }
+            : {},
+        imageDownsample:
+          reductionPassOptions.imageDownsample && typeof reductionPassOptions.imageDownsample === "object"
+            ? { ...reductionPassOptions.imageDownsample }
+            : {},
+        lineNumberStrip:
+          reductionPassOptions.lineNumberStrip && typeof reductionPassOptions.lineNumberStrip === "object"
+            ? { ...reductionPassOptions.lineNumberStrip }
+            : {},
+      },
     },
   };
 }
@@ -706,6 +825,34 @@ function isLikelyToolLikeInputItem(item: any): boolean {
   return false;
 }
 
+function isContextSafePersistedInputItem(item: any): boolean {
+  if (!item || typeof item !== "object") return false;
+  const details = item.details;
+  if (details && typeof details === "object") {
+    const contextSafe = (details as Record<string, unknown>).contextSafe;
+    if (contextSafe && typeof contextSafe === "object") {
+      const mode = String((contextSafe as Record<string, unknown>).resultMode ?? "").toLowerCase();
+      if (mode === "artifact" || mode === "inline-fallback") return true;
+      if ((contextSafe as Record<string, unknown>).excludedFromContext === true) return true;
+    }
+  }
+  const marker = "[ecoclaw persisted tool_result]";
+  if (typeof item.content === "string" && item.content.includes(marker)) return true;
+  if (Array.isArray(item.content)) {
+    for (const block of item.content) {
+      if (!block || typeof block !== "object") continue;
+      const text =
+        typeof (block as Record<string, unknown>).text === "string"
+          ? String((block as Record<string, unknown>).text)
+          : typeof (block as Record<string, unknown>).content === "string"
+            ? String((block as Record<string, unknown>).content)
+            : "";
+      if (text.includes(marker)) return true;
+    }
+  }
+  return false;
+}
+
 type ProxyReductionBinding =
   | { segmentId: string; itemIndex: number; field: "arguments" | "output" | "result"; beforeLen: number }
   | {
@@ -721,44 +868,194 @@ function detectToolPayloadKind(text: string): "stdout" | "stderr" | "json" | "bl
   return inferObservationPayloadKind(text);
 }
 
+function extractPathLike(value: any): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate =
+    value.path ?? value.file_path ?? value.filePath;
+  return typeof candidate === "string" && candidate.trim().length > 0
+    ? candidate.trim()
+    : undefined;
+}
+
 function parseFunctionCallArgsMapFromInput(input: any[]): Map<string, { toolName?: string; path?: string }> {
   const map = new Map<string, { toolName?: string; path?: string }>();
   for (const item of input) {
     if (!item || typeof item !== "object") continue;
     const type = String(item.type ?? "").toLowerCase();
-    if (type !== "function_call") continue;
-    const callId = String(item.call_id ?? item.id ?? "").trim();
+    const callId = String(
+      item.call_id
+      ?? item.tool_call_id
+      ?? item.toolCallId
+      ?? item.id
+      ?? "",
+    ).trim();
     if (!callId) continue;
-    const toolName = typeof item.name === "string" && item.name.trim().length > 0
-      ? item.name.trim()
-      : undefined;
-    let path: string | undefined;
-    try {
-      const args = typeof item.arguments === "string" ? JSON.parse(item.arguments) : item.arguments;
-      const candidate = args?.path ?? args?.file_path ?? args?.filePath;
-      if (typeof candidate === "string" && candidate.trim().length > 0) {
-        path = candidate.trim();
+
+    let toolName =
+      typeof item.name === "string" && item.name.trim().length > 0
+        ? item.name.trim()
+        : typeof item.tool_name === "string" && item.tool_name.trim().length > 0
+          ? item.tool_name.trim()
+          : typeof item.toolName === "string" && item.toolName.trim().length > 0
+            ? item.toolName.trim()
+            : undefined;
+
+    let path = extractPathLike(item) ?? extractPathLike(item?.details);
+    if (!path) {
+      try {
+        const args = typeof item.arguments === "string" ? JSON.parse(item.arguments) : item.arguments;
+        path = extractPathLike(args);
+      } catch {
+        // Ignore malformed tool arguments.
       }
-    } catch {
-      // Ignore malformed tool arguments.
+    }
+
+    // Historical assistant messages may carry nested toolCall items instead of flat function_call items.
+    if ((type === "message" || !type) && Array.isArray(item.content)) {
+      for (const block of item.content) {
+        if (!block || typeof block !== "object") continue;
+        const blockType = String(block.type ?? "").toLowerCase();
+        if (blockType !== "toolcall" && blockType !== "tool_call") continue;
+        const nestedCallId = String(block.id ?? block.call_id ?? "").trim();
+        if (!nestedCallId) continue;
+        const nestedToolName =
+          typeof block.name === "string" && block.name.trim().length > 0 ? block.name.trim() : undefined;
+        const nestedPath =
+          extractPathLike(block)
+          ?? (() => {
+            try {
+              const args = typeof block.arguments === "string" ? JSON.parse(block.arguments) : block.arguments;
+              return extractPathLike(args);
+            } catch {
+              return undefined;
+            }
+          })();
+        map.set(nestedCallId, { toolName: nestedToolName, path: nestedPath });
+      }
+    }
+
+    if (type !== "function_call" && type !== "tool_call" && type !== "toolcall" && type !== "message") {
+      // Still keep direct call-id/path fallbacks for tool_result-like items.
+      map.set(callId, { toolName, path });
+      continue;
     }
     map.set(callId, { toolName, path });
   }
   return map;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+const NULL_RUNTIME: RuntimeModuleRuntime = {
+  async callModel() {
+    throw new Error("callModel is unavailable in plugin-side before_call optimization");
+  },
+};
+
+function buildPolicyModuleConfigFromPluginConfig(
+  cfg: ReturnType<typeof normalizeConfig>,
+): PolicyModuleConfig {
+  return {
+    localityEnabled: true,
+    turnLocalCompactionEnabled: cfg.modules.compaction && cfg.compaction.turnLocalCompaction.enabled,
+    compactionEnabled: cfg.modules.compaction && cfg.compaction.enabled,
+    compactionCooldownTurns: cfg.compaction.compactionCooldownTurns,
+    reductionEnabled: false,
+    reductionFormatSlimmingEnabled: false,
+    reductionSemanticEnabled: false,
+    handoffEnabled: false,
+    evictionEnabled: cfg.modules.eviction && cfg.eviction.enabled,
+    evictionPolicy: cfg.eviction.policy,
+    evictionMinBlockChars: cfg.eviction.minBlockChars,
+    summaryGenerationMode: cfg.compaction.summaryGenerationMode,
+    summaryMaxOutputTokens: cfg.compaction.summaryMaxOutputTokens,
+    cacheHealthEnabled: false,
+  };
+}
+
+async function applyPolicyAndCompactionBeforeCall(
+  turnCtx: RuntimeTurnContext,
+  cfg: ReturnType<typeof normalizeConfig>,
+  modules?: {
+    policy?: RuntimeModule;
+    compaction?: RuntimeModule;
+    eviction?: RuntimeModule;
+  },
+): Promise<{
+  turnCtx: RuntimeTurnContext;
+  compactionChangedSegmentIds: string[];
+}> {
+  let nextCtx = turnCtx;
+  const bridgedReductionDecision = asRecord(
+    asRecord(asRecord(nextCtx.metadata?.policy)?.decisions)?.reduction,
+  );
+
+  if (cfg.modules.policy && modules?.policy?.beforeBuild) {
+    nextCtx = await modules.policy.beforeBuild(nextCtx, NULL_RUNTIME);
+    if (bridgedReductionDecision) {
+      const policy = asRecord(nextCtx.metadata?.policy) ?? {};
+      const decisions = asRecord(policy.decisions) ?? {};
+      nextCtx = {
+        ...nextCtx,
+        metadata: {
+          ...(nextCtx.metadata ?? {}),
+          policy: {
+            ...policy,
+            decisions: {
+              ...decisions,
+              reduction: bridgedReductionDecision,
+            },
+          },
+        },
+      };
+    }
+  }
+
+  const beforeCompaction = new Map(nextCtx.segments.map((segment) => [segment.id, segment.text]));
+  if (cfg.modules.compaction && modules?.compaction?.beforeCall) {
+    nextCtx = await modules.compaction.beforeCall(nextCtx, NULL_RUNTIME);
+  }
+  if (cfg.modules.eviction && modules?.eviction?.beforeCall) {
+    nextCtx = await modules.eviction.beforeCall(nextCtx, NULL_RUNTIME);
+  }
+  const compactionChangedSegmentIds: string[] = [];
+  for (const segment of nextCtx.segments) {
+    if (beforeCompaction.get(segment.id) !== segment.text) {
+      compactionChangedSegmentIds.push(segment.id);
+    }
+  }
+
+  return { turnCtx: nextCtx, compactionChangedSegmentIds };
+}
+
 function buildLayeredReductionContext(
   payload: any,
   triggerMinChars: number,
+  passToggles?: {
+    repeatedReadDedup?: boolean;
+    toolPayloadTrim?: boolean;
+    htmlSlimming?: boolean;
+    execOutputTruncation?: boolean;
+    agentsStartupOptimization?: boolean;
+    memoryFaultRecovery?: boolean;
+  },
+  passOptions?: Record<string, Record<string, unknown>>,
 ): {
   turnCtx: RuntimeTurnContext;
   bindings: ProxyReductionBinding[];
   stats: {
     inputItems: number;
     toolLikeItems: number;
+    persistedSkippedItems: number;
     candidateBlocks: number;
     overThresholdBlocks: number;
     instructionCount: number;
+    enableToolPayloadTrim?: boolean;
+    passToggles?: Record<string, boolean>;
+    reductionInstructionStrategies?: string[];
   };
 } {
   const input = Array.isArray(payload?.input) ? payload.input : [];
@@ -789,8 +1086,49 @@ function buildLayeredReductionContext(
   };
 
   const readByPath = new Map<string, string[]>();
-  const enableRepeatedReadDedup = true;
+  const enableRepeatedReadDedup = passToggles?.repeatedReadDedup ?? true;
+  const enableToolPayloadTrim = passToggles?.toolPayloadTrim ?? true;
+  const enableHtmlSlimming = passToggles?.htmlSlimming ?? true;
+  const enableExecOutputTruncation = passToggles?.execOutputTruncation ?? true;
+  const execOutputOptions = passOptions?.exec_output_truncation ?? {};
+  const execOutputToolThresholds =
+    execOutputOptions.toolThresholds && typeof execOutputOptions.toolThresholds === "object"
+      ? execOutputOptions.toolThresholds as Record<string, number>
+      : undefined;
+  const EXEC_OUTPUT_DEFAULT_THRESHOLD_CHARS = 50_000;
+  const EXEC_OUTPUT_TOOL_THRESHOLDS: Record<string, number> = {
+    bash: 30_000,
+    shell: 30_000,
+    powershell: 30_000,
+    grep: 20_000,
+    rg: 20_000,
+    read: Number.POSITIVE_INFINITY,
+    file_read: Number.POSITIVE_INFINITY,
+    mcp_auth: 10_000,
+    glob: 100_000,
+    write: 100_000,
+    edit: 100_000,
+    file_write: 100_000,
+    file_edit: 100_000,
+    web_fetch: 100_000,
+    web_search: 100_000,
+    agent: 100_000,
+    task: 100_000,
+  };
+  const getExecOutputThreshold = (rawToolName: string): number => {
+    const normalizedToolName = rawToolName.trim().toLowerCase();
+    if (!normalizedToolName) return EXEC_OUTPUT_DEFAULT_THRESHOLD_CHARS;
+    if (
+      execOutputToolThresholds &&
+      typeof execOutputToolThresholds[normalizedToolName] === "number" &&
+      Number.isFinite(execOutputToolThresholds[normalizedToolName])
+    ) {
+      return execOutputToolThresholds[normalizedToolName] as number;
+    }
+    return EXEC_OUTPUT_TOOL_THRESHOLDS[normalizedToolName] ?? EXEC_OUTPUT_DEFAULT_THRESHOLD_CHARS;
+  };
   let toolLikeItems = 0;
+  let persistedSkippedItems = 0;
   let candidateBlocks = 0;
   let overThresholdBlocks = 0;
 
@@ -798,6 +1136,10 @@ function buildLayeredReductionContext(
     const item = input[index];
     if (!item || typeof item !== "object") continue;
     if (!isLikelyToolLikeInputItem(item)) continue;
+    if (isContextSafePersistedInputItem(item)) {
+      persistedSkippedItems += 1;
+      continue;
+    }
     toolLikeItems += 1;
 
     const itemType = String(item.type ?? "").toLowerCase();
@@ -811,28 +1153,48 @@ function buildLayeredReductionContext(
       ?? callMeta?.toolName
       ?? "",
     ).trim();
-    const dataPath = String(callMeta?.path ?? "").trim();
+    const directPath =
+      extractPathLike(item)
+      ?? extractPathLike(item?.details)
+      ?? (() => {
+        try {
+          const args = typeof item.arguments === "string" ? JSON.parse(item.arguments) : item.arguments;
+          return extractPathLike(args);
+        } catch {
+          return undefined;
+        }
+      })();
+    const dataPath = String(callMeta?.path ?? directPath ?? "").trim();
 
     const addReductionInstructions = (segmentId: string, text: string): void => {
       candidateBlocks += 1;
-      const overThreshold = text.length >= triggerMinChars;
+      const execOutputThreshold = getExecOutputThreshold(toolName);
+      const overThreshold = text.length >= execOutputThreshold;
       if (overThreshold) {
         overThresholdBlocks += 1;
       }
       const payloadKind = detectToolPayloadKind(text) ?? "stdout";
-      reductionInstructions.push({
-        strategy: "tool_payload_trim",
-        segmentIds: [segmentId],
-        parameters: { payloadKind },
-      });
-      reductionInstructions.push({
-        strategy: "html_slimming",
-        segmentIds: [segmentId],
-      });
-      if (overThreshold) {
+      if (enableToolPayloadTrim) {
+        reductionInstructions.push({
+          strategy: "tool_payload_trim",
+          segmentIds: [segmentId],
+          parameters: { payloadKind },
+        });
+        if (enableHtmlSlimming) {
+          reductionInstructions.push({
+            strategy: "html_slimming",
+            segmentIds: [segmentId],
+          });
+        }
+      }
+      if (overThreshold && enableExecOutputTruncation) {
         reductionInstructions.push({
           strategy: "exec_output_truncation",
           segmentIds: [segmentId],
+          parameters: {
+            toolName: toolName || undefined,
+            thresholdChars: Number.isFinite(execOutputThreshold) ? execOutputThreshold : undefined,
+          },
         });
       }
     };
@@ -864,7 +1226,7 @@ function buildLayeredReductionContext(
       if (applyReduction) {
         addReductionInstructions(segmentId, text);
       }
-      if (toolName === "read" && dataPath) {
+      if (toolName === "read" && dataPath && fieldName !== "arguments") {
         const bucket = readByPath.get(dataPath) ?? [];
         bucket.push(segmentId);
         readByPath.set(dataPath, bucket);
@@ -985,11 +1347,11 @@ function buildLayeredReductionContext(
           reduction: {
             enabled: true,
             beforeCallPassIds: [
-              "repeated_read_dedup",
-              "tool_payload_trim",
-              "html_slimming",
-              "exec_output_truncation",
-            ],
+              enableRepeatedReadDedup ? "repeated_read_dedup" : null,
+              enableToolPayloadTrim ? "tool_payload_trim" : null,
+              enableHtmlSlimming ? "html_slimming" : null,
+              enableExecOutputTruncation ? "exec_output_truncation" : null,
+            ].filter(Boolean) as string[],
             instructions: reductionInstructions,
           },
         },
@@ -1003,27 +1365,79 @@ function buildLayeredReductionContext(
     stats: {
       inputItems: input.length,
       toolLikeItems,
+      persistedSkippedItems,
       candidateBlocks,
       overThresholdBlocks,
       instructionCount: reductionInstructions.length,
+      enableToolPayloadTrim,
+      passToggles: {
+        repeatedReadDedup: enableRepeatedReadDedup,
+        toolPayloadTrim: enableToolPayloadTrim,
+        htmlSlimming: enableHtmlSlimming,
+        execOutputTruncation: enableExecOutputTruncation,
+      },
+      reductionInstructionStrategies: reductionInstructions.map((item) => item.strategy),
     },
   };
+}
+
+function isReductionPassEnabled(
+  passId: string,
+  passToggles?: {
+    repeatedReadDedup?: boolean;
+    toolPayloadTrim?: boolean;
+    htmlSlimming?: boolean;
+    execOutputTruncation?: boolean;
+    agentsStartupOptimization?: boolean;
+    memoryFaultRecovery?: boolean;
+  },
+): boolean {
+  if (!passToggles) return true;
+  switch (passId) {
+    case "repeated_read_dedup":
+      return passToggles.repeatedReadDedup ?? true;
+    case "tool_payload_trim":
+      return passToggles.toolPayloadTrim ?? true;
+    case "html_slimming":
+      return passToggles.htmlSlimming ?? true;
+    case "exec_output_truncation":
+      return passToggles.execOutputTruncation ?? true;
+    case "agents_startup_optimization":
+      return passToggles.agentsStartupOptimization ?? true;
+    case "memory_fault_recovery":
+      return passToggles.memoryFaultRecovery ?? true;
+    default:
+      return true;
+  }
 }
 
 type ProxyReductionResult = {
   changedItems: number;
   changedBlocks: number;
   savedChars: number;
+  report?: Array<{
+    id: string;
+    phase: string;
+    target: string;
+    changed: boolean;
+    note?: string;
+    skippedReason?: string;
+    beforeChars: number;
+    afterChars: number;
+    touchedSegmentIds?: string[];
+  }>;
   diagnostics?: {
     engine: "layered";
     inputItems: number;
     toolLikeItems: number;
+    persistedSkippedItems?: number;
     candidateBlocks: number;
     overThresholdBlocks: number;
     triggerMinChars: number;
     maxToolChars: number;
     instructionCount: number;
     passCount: number;
+    compactionChangedSegments?: number;
     skippedReason?: string;
   };
 };
@@ -1035,12 +1449,37 @@ type ProxyAfterCallReductionResult = {
   skippedReason?: string;
   mode?: "json" | "sse";
   patchedEvents?: number;
+  report?: Array<{
+    id: string;
+    phase: string;
+    target: string;
+    changed: boolean;
+    note?: string;
+    skippedReason?: string;
+    beforeChars: number;
+    afterChars: number;
+    touchedSegmentIds?: string[];
+  }>;
 };
 
 function applyLayeredReductionToInput(
   payload: any,
   maxToolChars: number,
   triggerMinChars: number,
+  passToggles?: {
+    repeatedReadDedup?: boolean;
+    toolPayloadTrim?: boolean;
+    htmlSlimming?: boolean;
+    execOutputTruncation?: boolean;
+    agentsStartupOptimization?: boolean;
+    memoryFaultRecovery?: boolean;
+  },
+  passOptions?: Record<string, Record<string, unknown>>,
+  beforeCallModules?: {
+    policy?: RuntimeModule;
+    compaction?: RuntimeModule;
+  },
+  cfg?: ReturnType<typeof normalizeConfig>,
 ): Promise<ProxyReductionResult> | ProxyReductionResult {
   if (!Array.isArray(payload?.input)) {
     return {
@@ -1048,7 +1487,7 @@ function applyLayeredReductionToInput(
       changedBlocks: 0,
       savedChars: 0,
       diagnostics: {
-        engine: "layered",
+        engine: "layered" as const,
         inputItems: 0,
         toolLikeItems: 0,
         candidateBlocks: 0,
@@ -1061,16 +1500,22 @@ function applyLayeredReductionToInput(
       },
     };
   }
-  const { turnCtx, bindings, stats } = buildLayeredReductionContext(payload, triggerMinChars);
+  const { turnCtx, bindings, stats } = buildLayeredReductionContext(
+    payload,
+    triggerMinChars,
+    passToggles,
+    passOptions,
+  );
   if (turnCtx.segments.length === 0 || bindings.length === 0) {
     return {
       changedItems: 0,
       changedBlocks: 0,
       savedChars: 0,
       diagnostics: {
-        engine: "layered",
+        engine: "layered" as const,
         inputItems: stats.inputItems,
         toolLikeItems: stats.toolLikeItems,
+        persistedSkippedItems: stats.persistedSkippedItems,
         candidateBlocks: stats.candidateBlocks,
         overThresholdBlocks: stats.overThresholdBlocks,
         triggerMinChars,
@@ -1081,25 +1526,35 @@ function applyLayeredReductionToInput(
       },
     };
   }
-  const passes = resolveLayerReductionPasses({ maxToolChars }).filter((p) => p.phase === "before_call");
-  return runLayerReductionBeforeCall({
-    turnCtx,
-    passes,
-  }).then(({ turnCtx: reducedCtx, report }) => {
+  const beforeCallCtxPromise = beforeCallModules && cfg
+    ? applyPolicyAndCompactionBeforeCall(turnCtx, cfg, beforeCallModules)
+    : Promise.resolve({ turnCtx, compactionChangedSegmentIds: [] as string[] });
+
+  const passes = resolveLayerReductionPasses({ maxToolChars, passOptions }).filter(
+    (p) => p.phase === "before_call" && isReductionPassEnabled(p.id, passToggles),
+  );
+  return beforeCallCtxPromise.then(({ turnCtx: preReductionCtx, compactionChangedSegmentIds }) =>
+    runLayerReductionBeforeCall({
+      turnCtx: preReductionCtx,
+      passes,
+    }).then(({ turnCtx: reducedCtx, report }) => {
     const changedIds = new Set<string>();
     for (const entry of report) {
       if (!entry.changed) continue;
       for (const id of entry.touchedSegmentIds ?? []) changedIds.add(id);
     }
+    for (const id of compactionChangedSegmentIds) changedIds.add(id);
     if (changedIds.size === 0) {
       return {
         changedItems: 0,
         changedBlocks: 0,
         savedChars: 0,
+        report,
         diagnostics: {
-          engine: "layered",
+          engine: "layered" as const,
           inputItems: stats.inputItems,
           toolLikeItems: stats.toolLikeItems,
+          persistedSkippedItems: stats.persistedSkippedItems,
           candidateBlocks: stats.candidateBlocks,
           overThresholdBlocks: stats.overThresholdBlocks,
           triggerMinChars,
@@ -1152,27 +1607,31 @@ function applyLayeredReductionToInput(
       changedItems: changedItems.size,
       changedBlocks,
       savedChars,
+      report,
       diagnostics: {
-        engine: "layered",
+        engine: "layered" as const,
         inputItems: stats.inputItems,
         toolLikeItems: stats.toolLikeItems,
+        persistedSkippedItems: stats.persistedSkippedItems,
         candidateBlocks: stats.candidateBlocks,
         overThresholdBlocks: stats.overThresholdBlocks,
         triggerMinChars,
         maxToolChars,
         instructionCount: stats.instructionCount,
         passCount: passes.length,
+        compactionChangedSegments: compactionChangedSegmentIds.length,
       },
     };
-  }).catch(() => {
+  })).catch(() => {
     return {
       changedItems: 0,
       changedBlocks: 0,
       savedChars: 0,
       diagnostics: {
-        engine: "layered",
+        engine: "layered" as const,
         inputItems: stats.inputItems,
         toolLikeItems: stats.toolLikeItems,
+        persistedSkippedItems: stats.persistedSkippedItems,
         candidateBlocks: stats.candidateBlocks,
         overThresholdBlocks: stats.overThresholdBlocks,
         triggerMinChars,
@@ -1191,11 +1650,33 @@ function applyProxyReductionToInput(
     engine?: "layered";
     triggerMinChars?: number;
     maxToolChars?: number;
+    passToggles?: {
+      repeatedReadDedup?: boolean;
+      toolPayloadTrim?: boolean;
+      htmlSlimming?: boolean;
+      execOutputTruncation?: boolean;
+      agentsStartupOptimization?: boolean;
+      memoryFaultRecovery?: boolean;
+    };
+    passOptions?: Record<string, Record<string, unknown>>;
+    beforeCallModules?: {
+      policy?: RuntimeModule;
+      compaction?: RuntimeModule;
+    };
+    cfg?: ReturnType<typeof normalizeConfig>;
   },
 ): Promise<ProxyReductionResult> | ProxyReductionResult {
   const triggerMinChars = Math.max(256, options?.triggerMinChars ?? 2200);
   const maxToolChars = Math.max(256, options?.maxToolChars ?? 1200);
-  return applyLayeredReductionToInput(payload, maxToolChars, triggerMinChars);
+  return applyLayeredReductionToInput(
+    payload,
+    maxToolChars,
+    triggerMinChars,
+    options?.passToggles,
+    options?.passOptions,
+    options?.beforeCallModules,
+    options?.cfg,
+  );
 }
 
 function extractProxyResponseText(parsedResponse: any): string {
@@ -1349,11 +1830,79 @@ function patchSseEventForReducedText(event: any, nextText: string): boolean {
   return changed;
 }
 
+// ============================================================================
+// Memory Fault Detection & Persistence
+// ============================================================================
+
+const MEMORY_FAULT_PATTERN = /memory_fault\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+type MemoryFaultEntry = {
+  dataKey: string;
+  archivePath: string;
+  requestedAt: number;
+  turnId: string;
+};
+
+async function persistMemoryFaultRequestsFromText(
+  text: string,
+  sessionId: string,
+  stateDir: string,
+): Promise<number> {
+  if (!text || typeof text !== "string") return 0;
+  const matches: string[] = [];
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(MEMORY_FAULT_PATTERN);
+  while ((match = regex.exec(text)) !== null) {
+    matches.push(match[1]);
+  }
+  if (matches.length === 0) return 0;
+
+  const faultDir = join(stateDir, "ecoclaw", "fault-recovery");
+  const faultPath = join(faultDir, `${sessionId}.json`);
+  try {
+    let existing: MemoryFaultEntry[] = [];
+    try {
+      const raw = readFileSync(faultPath, "utf8");
+      const parsed = JSON.parse(raw);
+      existing = Array.isArray(parsed) ? parsed : (parsed?.pendingRecoveries ?? []);
+    } catch {
+      existing = [];
+    }
+    const existingKeys = new Set(existing.map((e: MemoryFaultEntry) => e.dataKey));
+    const turnId = `turn-${Date.now()}`;
+    for (const dataKey of matches) {
+      if (!existingKeys.has(dataKey)) {
+        existing.push({
+          dataKey,
+          archivePath: "", // resolved lazily by recovery pass using its own session context
+          requestedAt: Date.now(),
+          turnId,
+        });
+        existingKeys.add(dataKey);
+      }
+    }
+    mkdirSync(dirname(faultPath), { recursive: true });
+    writeFileSync(faultPath, JSON.stringify({ pendingRecoveries: existing }, null, 2), "utf8");
+    return matches.length;
+  } catch {
+    return 0;
+  }
+}
+
 async function applyLayeredReductionAfterCallToSse(
   requestPayload: any,
   rawSse: string,
   maxToolChars: number,
   triggerMinChars: number,
+  passToggles?: {
+    repeatedReadDedup?: boolean;
+    toolPayloadTrim?: boolean;
+    htmlSlimming?: boolean;
+    execOutputTruncation?: boolean;
+    agentsStartupOptimization?: boolean;
+    memoryFaultRecovery?: boolean;
+  },
+  passOptions?: Record<string, Record<string, unknown>>,
 ): Promise<{ text: string; reduction: ProxyAfterCallReductionResult }> {
   let completedResponse: any = null;
   const probe = rewriteSseJsonEvents(rawSse, (event) => {
@@ -1389,6 +1938,8 @@ async function applyLayeredReductionAfterCallToSse(
     completedResponse,
     maxToolChars,
     triggerMinChars,
+    passToggles,
+    passOptions,
   );
   if (!afterCallReduction.changed) {
     return { text: rawSse, reduction: { ...afterCallReduction, mode: "sse" } };
@@ -1430,14 +1981,30 @@ async function applyLayeredReductionAfterCall(
   parsedResponse: any,
   maxToolChars: number,
   triggerMinChars: number,
+  passToggles?: {
+    repeatedReadDedup?: boolean;
+    toolPayloadTrim?: boolean;
+    htmlSlimming?: boolean;
+    execOutputTruncation?: boolean;
+    agentsStartupOptimization?: boolean;
+    memoryFaultRecovery?: boolean;
+  },
+  passOptions?: Record<string, Record<string, unknown>>,
 ): Promise<ProxyAfterCallReductionResult> {
   const responseText = extractProxyResponseText(parsedResponse);
   if (!responseText) {
     return { changed: false, savedChars: 0, passCount: 0, skippedReason: "empty_response_text" };
   }
 
-  const { turnCtx } = buildLayeredReductionContext(requestPayload, triggerMinChars);
-  const passes = resolveLayerReductionPasses({ maxToolChars }).filter((p) => p.phase === "after_call");
+  const { turnCtx } = buildLayeredReductionContext(
+    requestPayload,
+    triggerMinChars,
+    passToggles,
+    passOptions,
+  );
+  const passes = resolveLayerReductionPasses({ maxToolChars, passOptions }).filter(
+    (p) => p.phase === "after_call" && isReductionPassEnabled(p.id, passToggles),
+  );
   if (passes.length === 0) {
     return { changed: false, savedChars: 0, passCount: 0, skippedReason: "no_after_call_passes" };
   }
@@ -1446,7 +2013,7 @@ async function applyLayeredReductionAfterCall(
     content: responseText,
     metadata: {},
   };
-  const { result: reducedResult } = await runLayerReductionAfterCall({
+  const { result: reducedResult, report: afterReport } = await runLayerReductionAfterCall({
     turnCtx,
     result,
     passes,
@@ -1454,17 +2021,30 @@ async function applyLayeredReductionAfterCall(
 
   const nextText = String(reducedResult?.content ?? "");
   if (!nextText || nextText === responseText) {
-    return { changed: false, savedChars: 0, passCount: passes.length, skippedReason: "pipeline_no_effect" };
+    return {
+      changed: false,
+      savedChars: 0,
+      passCount: passes.length,
+      skippedReason: "pipeline_no_effect",
+      report: afterReport,
+    };
   }
 
   const patched = patchProxyResponseText(parsedResponse, nextText);
   if (!patched) {
-    return { changed: false, savedChars: 0, passCount: passes.length, skippedReason: "response_patch_no_effect" };
+    return {
+      changed: false,
+      savedChars: 0,
+      passCount: passes.length,
+      skippedReason: "response_patch_no_effect",
+      report: afterReport,
+    };
   }
   return {
     changed: true,
     savedChars: Math.max(0, responseText.length - nextText.length),
     passCount: passes.length,
+    report: afterReport,
   };
 }
 
@@ -1640,6 +2220,300 @@ type UpstreamConfig = {
   models: UpstreamModelDef[];
 };
 
+type UpstreamHttpResponse = {
+  status: number;
+  headers: Record<string, string>;
+  text: string;
+  transport: "fetch" | "curl";
+};
+
+function runExecFile(
+  file: string,
+  args: string[],
+  options?: {
+    input?: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+  },
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      file,
+      args,
+      {
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+        env: options?.env,
+        timeout: options?.timeoutMs,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`${file} failed: ${stderr || error.message}`));
+          return;
+        }
+        resolve({ stdout, stderr });
+      },
+    );
+    if (options?.input != null) {
+      child.stdin?.end(options.input);
+    }
+  });
+}
+
+function parseCurlHeaders(raw: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const line of raw.replace(/\r/g, "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("HTTP/")) continue;
+    const idx = trimmed.indexOf(":");
+    if (idx <= 0) continue;
+    headers[trimmed.slice(0, idx).trim().toLowerCase()] = trimmed.slice(idx + 1).trim();
+  }
+  return headers;
+}
+
+function buildUpstreamCurlEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SHELL",
+  ]) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.length > 0) {
+      env[key] = value;
+    }
+  }
+  const { httpProxy, httpsProxy, allProxy, noProxy } = resolveUpstreamProxySettings();
+
+  if (httpProxy) {
+    env.http_proxy = httpProxy;
+    env.HTTP_PROXY = httpProxy;
+  }
+  if (httpsProxy) {
+    env.https_proxy = httpsProxy;
+    env.HTTPS_PROXY = httpsProxy;
+  }
+  if (allProxy) {
+    env.all_proxy = allProxy;
+    env.ALL_PROXY = allProxy;
+  }
+  if (noProxy) {
+    env.no_proxy = noProxy;
+    env.NO_PROXY = noProxy;
+  }
+  return env;
+}
+
+function resolveUpstreamProxySettings(): {
+  httpProxy?: string;
+  httpsProxy?: string;
+  allProxy?: string;
+  noProxy?: string;
+} {
+  const httpProxy =
+    process.env.ECOCLAW_UPSTREAM_HTTP_PROXY
+    || process.env.ecoclaw_upstream_http_proxy
+    || process.env.http_proxy
+    || process.env.HTTP_PROXY;
+  const httpsProxy =
+    process.env.ECOCLAW_UPSTREAM_HTTPS_PROXY
+    || process.env.ecoclaw_upstream_https_proxy
+    || process.env.https_proxy
+    || process.env.HTTPS_PROXY
+    || httpProxy;
+  const allProxy =
+    process.env.ECOCLAW_UPSTREAM_ALL_PROXY
+    || process.env.ecoclaw_upstream_all_proxy
+    || process.env.all_proxy
+    || process.env.ALL_PROXY;
+  const noProxy =
+    process.env.ECOCLAW_UPSTREAM_NO_PROXY
+    || process.env.ecoclaw_upstream_no_proxy
+    || process.env.no_proxy
+    || process.env.NO_PROXY
+    || "127.0.0.1,localhost";
+  return {
+    httpProxy: httpProxy?.trim() || undefined,
+    httpsProxy: httpsProxy?.trim() || undefined,
+    allProxy: allProxy?.trim() || undefined,
+    noProxy: noProxy?.trim() || undefined,
+  };
+}
+
+function hasExplicitUpstreamProxyEnv(): boolean {
+  const settings = resolveUpstreamProxySettings();
+  return Boolean(settings.httpProxy || settings.httpsProxy || settings.allProxy);
+}
+
+async function appendUpstreamTransportTrace(
+  logger: Required<PluginLogger>,
+  record: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const cfg = normalizeConfig(logger.config ?? {});
+    const tracePath = join(cfg.stateDir, "ecoclaw", "upstream-transport-trace.jsonl");
+    await mkdir(dirname(tracePath), { recursive: true });
+    await appendFile(
+      tracePath,
+      `${JSON.stringify({ at: new Date().toISOString(), ...record })}\n`,
+      "utf8",
+    );
+  } catch {
+    // best-effort trace only
+  }
+}
+
+async function requestUpstreamWithCurl(
+  upstream: UpstreamConfig,
+  payload: any,
+  logger?: Required<PluginLogger>,
+): Promise<UpstreamHttpResponse> {
+  const tempDir = await mkdtemp(join(tmpdir(), "ecoclaw-curl-"));
+  const bodyPath = join(tempDir, "request.json");
+  const headersPath = join(tempDir, "headers.txt");
+  const curlEnv = buildUpstreamCurlEnv();
+  const proxySettings = resolveUpstreamProxySettings();
+  try {
+    await writeFile(bodyPath, JSON.stringify(payload), "utf8");
+    await appendUpstreamTransportTrace(logger ?? createPluginLogger("warn"), {
+      stage: "curl_start",
+      upstreamBaseUrl: upstream.baseUrl,
+      httpProxy: curlEnv.http_proxy ?? curlEnv.HTTP_PROXY ?? "",
+      httpsProxy: curlEnv.https_proxy ?? curlEnv.HTTPS_PROXY ?? "",
+      noProxy: curlEnv.no_proxy ?? curlEnv.NO_PROXY ?? "",
+    });
+    const { stdout } = await runExecFile(
+      "curl",
+      (() => {
+        const args = [
+        "-sS",
+        "-X",
+        "POST",
+        `${upstream.baseUrl}/responses`,
+        "-H",
+        "content-type: application/json",
+        "-H",
+        `authorization: Bearer ${upstream.apiKey}`,
+        "--data-binary",
+        `@${bodyPath}`,
+        "--dump-header",
+        headersPath,
+        "--output",
+        "-",
+        "--write-out",
+        "\n__ECOCLAW_CURL_STATUS__:%{http_code}",
+        ];
+        const targetUrl = new URL(`${upstream.baseUrl}/responses`);
+        const chosenProxy = targetUrl.protocol === "https:"
+          ? (proxySettings.httpsProxy || proxySettings.allProxy || proxySettings.httpProxy)
+          : (proxySettings.httpProxy || proxySettings.allProxy || proxySettings.httpsProxy);
+        if (chosenProxy) {
+          args.push("--proxy", chosenProxy);
+        }
+        if (proxySettings.noProxy) {
+          args.push("--noproxy", proxySettings.noProxy);
+        }
+        return args;
+      })(),
+      {
+        env: curlEnv,
+        timeoutMs: 180000,
+      },
+    );
+    const marker = "\n__ECOCLAW_CURL_STATUS__:";
+    const idx = stdout.lastIndexOf(marker);
+    if (idx < 0) {
+      throw new Error("curl missing status marker");
+    }
+    const text = stdout.slice(0, idx);
+    const status = Number.parseInt(stdout.slice(idx + marker.length).trim(), 10);
+    const rawHeaders = await readFile(headersPath, "utf8");
+    await appendUpstreamTransportTrace(logger ?? createPluginLogger("warn"), {
+      stage: "curl_ok",
+      upstreamBaseUrl: upstream.baseUrl,
+      status: Number.isFinite(status) ? status : 502,
+    });
+    return {
+      status: Number.isFinite(status) ? status : 502,
+      headers: parseCurlHeaders(rawHeaders),
+      text,
+      transport: "curl",
+    };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    await appendUpstreamTransportTrace(logger ?? createPluginLogger("warn"), {
+      stage: "curl_error",
+      upstreamBaseUrl: upstream.baseUrl,
+      error: detail,
+      httpProxy: curlEnv.http_proxy ?? curlEnv.HTTP_PROXY ?? "",
+      httpsProxy: curlEnv.https_proxy ?? curlEnv.HTTPS_PROXY ?? "",
+      noProxy: curlEnv.no_proxy ?? curlEnv.NO_PROXY ?? "",
+    });
+    throw err;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function requestUpstreamResponses(
+  upstream: UpstreamConfig,
+  payload: any,
+  logger: Required<PluginLogger>,
+): Promise<UpstreamHttpResponse> {
+  if (hasExplicitUpstreamProxyEnv()) {
+    await appendUpstreamTransportTrace(logger, {
+      stage: "transport_policy",
+      upstreamBaseUrl: upstream.baseUrl,
+      policy: "prefer_curl_due_to_proxy_env",
+    });
+    return requestUpstreamWithCurl(upstream, payload, logger);
+  }
+  try {
+    const resp = await fetch(`${upstream.baseUrl}/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${upstream.apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    return {
+      status: resp.status,
+      headers: Object.fromEntries(resp.headers.entries()),
+      text: await resp.text(),
+      transport: "fetch",
+    };
+  } catch (err) {
+    const fetchDetail = err instanceof Error ? err.message : String(err);
+    await appendUpstreamTransportTrace(logger, {
+      stage: "fetch_error",
+      upstreamBaseUrl: upstream.baseUrl,
+      error: fetchDetail,
+    });
+    logger.warn(`[ecoclaw] upstream fetch failed, fallback to curl: ${fetchDetail}`);
+    try {
+      return await requestUpstreamWithCurl(upstream, payload, logger);
+    } catch (curlErr) {
+      const curlDetail = curlErr instanceof Error ? curlErr.message : String(curlErr);
+      await appendUpstreamTransportTrace(logger, {
+        stage: "fetch_then_curl_error",
+        upstreamBaseUrl: upstream.baseUrl,
+        fetchError: fetchDetail,
+        curlError: curlDetail,
+      });
+      logger.error(`[ecoclaw] upstream curl fallback failed: ${curlDetail}`);
+      throw new Error(`upstream fetch failed (${fetchDetail}); curl fallback failed (${curlDetail})`);
+    }
+  }
+}
+
 async function detectUpstreamConfig(logger: Required<PluginLogger>): Promise<UpstreamConfig | null> {
   const cfgPath = join(homedir(), ".openclaw", "openclaw.json");
   try {
@@ -1764,6 +2638,18 @@ async function startEmbeddedResponsesProxy(
     return null;
   }
 
+  const policyModule = createPolicyModule(buildPolicyModuleConfigFromPluginConfig(cfg));
+  const compactionModule = createCompactionModule({
+    turnLocalCompaction: {
+      enabled: cfg.compaction.turnLocalCompaction.enabled,
+      archiveDir: cfg.compaction.turnLocalCompaction.archiveDir,
+    },
+  });
+  const evictionModule = createEvictionModule({
+    enabled: cfg.modules.eviction && cfg.eviction.enabled,
+    policy: cfg.eviction.policy,
+  });
+
   const server = createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/health") {
@@ -1786,10 +2672,13 @@ async function startEmbeddedResponsesProxy(
       if (upstreamModel && upstreamModel !== model) {
         payload.model = upstreamModel;
       }
+      const proxyPureForward = cfg.proxyMode.pureForward;
+      const reductionTriggerMinChars = Math.max(256, cfg.reduction.triggerMinChars ?? 2200);
+      const reductionMaxToolChars = Math.max(256, cfg.reduction.maxToolChars ?? 1200);
       const instructions = normalizeText(String(payload?.instructions ?? ""));
-      const devAndUser = findDeveloperAndPrimaryUser(payload?.input);
+      const devAndUser = !proxyPureForward ? findDeveloperAndPrimaryUser(payload?.input) : null;
       const firstTurnCandidate = Boolean(devAndUser);
-      const rootPromptRewrite = devAndUser
+      const rootPromptRewrite = devAndUser && !proxyPureForward
         ? rewriteRootPromptForStablePrefix(devAndUser.developerText)
         : null;
       const developerCanonicalText = normalizeText(
@@ -1802,7 +2691,7 @@ async function startEmbeddedResponsesProxy(
         typeof payload?.prompt_cache_key === "string" && payload.prompt_cache_key.trim().length > 0
           ? String(payload.prompt_cache_key)
           : "";
-      if (devAndUser && rootPromptRewrite && Array.isArray(payload?.input) && devAndUser.developerIndex >= 0) {
+      if (!proxyPureForward && devAndUser && rootPromptRewrite && Array.isArray(payload?.input) && devAndUser.developerIndex >= 0) {
         payload.input[devAndUser.developerIndex] = {
           ...(devAndUser.developerItem ?? payload.input[devAndUser.developerIndex]),
           role: "developer",
@@ -1819,26 +2708,86 @@ async function startEmbeddedResponsesProxy(
           };
         }
       }
-      const stableRewrite = rewritePayloadForStablePrefix(payload, model);
-      const reductionApplied = cfg.modules.reduction
+      const stableRewrite = !proxyPureForward
+        ? rewritePayloadForStablePrefix(payload, model)
+        : {
+          promptCacheKey:
+            typeof payload?.prompt_cache_key === "string" && payload.prompt_cache_key.trim().length > 0
+              ? String(payload.prompt_cache_key)
+              : "",
+          userContentRewrites: 0,
+          senderMetadataBlocksBefore: 0,
+          senderMetadataBlocksAfter: 0,
+        };
+      const reductionApplied: ProxyReductionResult = !proxyPureForward && cfg.modules.reduction
         ? await applyProxyReductionToInput(payload, {
           engine: cfg.reduction.engine,
           triggerMinChars: cfg.reduction.triggerMinChars,
           maxToolChars: cfg.reduction.maxToolChars,
+          passToggles: cfg.reduction.passes,
+          passOptions: {
+            repeated_read_dedup: cfg.reduction.passOptions.repeatedReadDedup,
+            tool_payload_trim: cfg.reduction.passOptions.toolPayloadTrim,
+            html_slimming: cfg.reduction.passOptions.htmlSlimming,
+            exec_output_truncation: cfg.reduction.passOptions.execOutputTruncation,
+            agents_startup_optimization: cfg.reduction.passOptions.agentsStartupOptimization,
+            memory_fault_recovery: cfg.reduction.passOptions.memoryFaultRecovery,
+            format_slimming: cfg.reduction.passOptions.formatSlimming,
+            semantic_llmlingua2: cfg.reduction.passOptions.semanticLlmlingua2,
+            format_cleaning: cfg.reduction.passOptions.formatCleaning,
+            path_truncation: cfg.reduction.passOptions.pathTruncation,
+            image_downsample: cfg.reduction.passOptions.imageDownsample,
+            line_number_strip: cfg.reduction.passOptions.lineNumberStrip,
+          },
+          beforeCallModules: {
+            policy: policyModule,
+            compaction: compactionModule,
+            eviction: evictionModule,
+          },
+          cfg,
         })
-        : { changedItems: 0, changedBlocks: 0, savedChars: 0 };
-      if (cfg.modules.reduction) {
+        : {
+          changedItems: 0,
+          changedBlocks: 0,
+          savedChars: 0,
+          diagnostics: {
+            engine: "layered",
+            inputItems: Array.isArray(payload?.input) ? payload.input.length : 0,
+            toolLikeItems: 0,
+            candidateBlocks: 0,
+            overThresholdBlocks: 0,
+            triggerMinChars: reductionTriggerMinChars,
+            maxToolChars: reductionMaxToolChars,
+            instructionCount: 0,
+            passCount: 0,
+            skippedReason: proxyPureForward ? "proxy_pure_forward" : "module_disabled",
+          },
+        };
+      if (!proxyPureForward && cfg.modules.reduction) {
         payload.__ecoclaw_reduction_applied = true;
       }
       stripInternalPayloadMarkers(payload);
       logger.info(
-        `[ecoclaw] proxy request model=${model || "unknown"} upstreamModel=${upstreamModel || "unknown"} instrChars=${instructions.length} cacheKey=${stableRewrite.promptCacheKey} userContentRewrites=${stableRewrite.userContentRewrites} senderBlocks=${stableRewrite.senderMetadataBlocksBefore}->${stableRewrite.senderMetadataBlocksAfter} reductionEngine=${cfg.reduction.engine} reductionItems=${reductionApplied.changedItems} reductionBlocks=${reductionApplied.changedBlocks} reductionSavedChars=${reductionApplied.savedChars} reductionCandidates=${(reductionApplied as ProxyReductionResult).diagnostics?.candidateBlocks ?? 0} reductionOverThreshold=${(reductionApplied as ProxyReductionResult).diagnostics?.overThresholdBlocks ?? 0} reductionSkipped=${(reductionApplied as ProxyReductionResult).diagnostics?.skippedReason ?? "none"}`,
+        `[ecoclaw] proxy request model=${model || "unknown"} upstreamModel=${upstreamModel || "unknown"} instrChars=${instructions.length} cacheKey=${stableRewrite.promptCacheKey} userContentRewrites=${stableRewrite.userContentRewrites} senderBlocks=${stableRewrite.senderMetadataBlocksBefore}->${stableRewrite.senderMetadataBlocksAfter} reductionEngine=${proxyPureForward ? "proxy_pure_forward" : cfg.reduction.engine} reductionItems=${reductionApplied.changedItems} reductionBlocks=${reductionApplied.changedBlocks} reductionSavedChars=${reductionApplied.savedChars} reductionCandidates=${reductionApplied.diagnostics?.candidateBlocks ?? 0} reductionOverThreshold=${reductionApplied.diagnostics?.overThresholdBlocks ?? 0} reductionPersistedSkipped=${reductionApplied.diagnostics?.persistedSkippedItems ?? 0} reductionSkipped=${reductionApplied.diagnostics?.skippedReason ?? "none"}`,
       );
       // Always log all proxy requests to a dedicated file for debugging
       {
+        const requestAt = new Date().toISOString();
+        const requestId = createHash("sha1")
+          .update(JSON.stringify([
+            requestAt,
+            model,
+            upstreamModel,
+            stableRewrite.promptCacheKey,
+            payload?.previous_response_id ?? "",
+            Array.isArray(payload?.input) ? payload.input.length : -1,
+          ]))
+          .digest("hex")
+          .slice(0, 16);
         const proxyLogPath = join(cfg.stateDir, "ecoclaw", "proxy-requests.jsonl");
         const logRecord = {
-          at: new Date().toISOString(),
+          at: requestAt,
+          requestId,
           stage: "proxy_inbound",
           model,
           upstreamModel,
@@ -1855,11 +2804,26 @@ async function startEmbeddedResponsesProxy(
           reductionChangedItems: reductionApplied.changedItems,
           reductionChangedBlocks: reductionApplied.changedBlocks,
           reductionSavedChars: reductionApplied.savedChars,
-          reductionDiagnostics: (reductionApplied as ProxyReductionResult).diagnostics,
+          reductionReport: reductionApplied.report ?? null,
+          reductionDiagnostics: reductionApplied.diagnostics,
           reductionEngine: cfg.reduction.engine,
         };
         await mkdir(dirname(proxyLogPath), { recursive: true });
         await appendFile(proxyLogPath, `${JSON.stringify(logRecord)}\n`, "utf8");
+        await appendReductionPassTrace(cfg.stateDir, {
+          at: requestAt,
+          stage: "proxy_inbound",
+          model,
+          upstreamModel,
+          promptCacheKey: stableRewrite.promptCacheKey,
+          requestId,
+          report: reductionApplied.report ?? [],
+          extra: {
+            reductionSavedChars: reductionApplied.savedChars,
+            reductionChangedItems: reductionApplied.changedItems,
+            reductionChangedBlocks: reductionApplied.changedBlocks,
+          },
+        });
       }
       if (cfg.debugTapProviderTraffic) {
         const debugRecord = {
@@ -1884,33 +2848,31 @@ async function startEmbeddedResponsesProxy(
           reductionChangedItems: reductionApplied.changedItems,
           reductionChangedBlocks: reductionApplied.changedBlocks,
           reductionSavedChars: reductionApplied.savedChars,
-          reductionDiagnostics: (reductionApplied as ProxyReductionResult).diagnostics,
+          reductionReport: reductionApplied.report ?? null,
+          reductionDiagnostics: reductionApplied.diagnostics,
           payload,
         };
         await mkdir(dirname(cfg.debugTapPath), { recursive: true });
         await appendFile(cfg.debugTapPath, `${JSON.stringify(debugRecord)}\n`, "utf8");
       }
       payload.prompt_cache_retention = "24h";
-      const upstreamResp = await fetch(`${upstream.baseUrl}/responses`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${upstream.apiKey}`,
-        },
-        body: JSON.stringify(payload),
-      });
-      let txt = await upstreamResp.text();
+      const upstreamResp = await requestUpstreamResponses(upstream, payload, logger);
+      let txt = upstreamResp.text;
       let parsedResponseForMirror: any = null;
-      const responseContentType = upstreamResp.headers.get("content-type") ?? "";
-      const reductionMaxToolChars = Math.max(256, cfg.reduction.maxToolChars ?? 1200);
-      const reductionTriggerMinChars = Math.max(256, cfg.reduction.triggerMinChars ?? 2200);
+      const responseContentType = upstreamResp.headers["content-type"] ?? "";
       try {
         parsedResponseForMirror = JSON.parse(txt);
       } catch {
         parsedResponseForMirror = null;
       }
       let afterCallReduction: ProxyAfterCallReductionResult | null = null;
-      if (cfg.modules.reduction && cfg.reduction.engine === "layered") {
+      // Detect memory_fault(...) in the raw response text and persist to fault state
+      // so that the next turn's before_call can recover the archived content
+      const faultCount = await persistMemoryFaultRequestsFromText(txt, "proxy-session", cfg.stateDir);
+      if (faultCount > 0) {
+        logger.info(`[ecoclaw] memory_fault: detected ${faultCount} fault request(s) in LLM response, persisted for next turn recovery`);
+      }
+      if (!proxyPureForward && cfg.modules.reduction && cfg.reduction.engine === "layered") {
         if (parsedResponseForMirror) {
           try {
             afterCallReduction = await applyLayeredReductionAfterCall(
@@ -1918,6 +2880,21 @@ async function startEmbeddedResponsesProxy(
               parsedResponseForMirror,
               reductionMaxToolChars,
               reductionTriggerMinChars,
+              cfg.reduction.passes,
+              {
+                repeated_read_dedup: cfg.reduction.passOptions.repeatedReadDedup,
+                tool_payload_trim: cfg.reduction.passOptions.toolPayloadTrim,
+                html_slimming: cfg.reduction.passOptions.htmlSlimming,
+                exec_output_truncation: cfg.reduction.passOptions.execOutputTruncation,
+                agents_startup_optimization: cfg.reduction.passOptions.agentsStartupOptimization,
+                memory_fault_recovery: cfg.reduction.passOptions.memoryFaultRecovery,
+                format_slimming: cfg.reduction.passOptions.formatSlimming,
+                semantic_llmlingua2: cfg.reduction.passOptions.semanticLlmlingua2,
+                format_cleaning: cfg.reduction.passOptions.formatCleaning,
+                path_truncation: cfg.reduction.passOptions.pathTruncation,
+                image_downsample: cfg.reduction.passOptions.imageDownsample,
+                line_number_strip: cfg.reduction.passOptions.lineNumberStrip,
+              },
             );
             if (afterCallReduction.changed) {
               txt = JSON.stringify(parsedResponseForMirror);
@@ -1939,6 +2916,21 @@ async function startEmbeddedResponsesProxy(
               txt,
               reductionMaxToolChars,
               reductionTriggerMinChars,
+              cfg.reduction.passes,
+              {
+                repeated_read_dedup: cfg.reduction.passOptions.repeatedReadDedup,
+                tool_payload_trim: cfg.reduction.passOptions.toolPayloadTrim,
+                html_slimming: cfg.reduction.passOptions.htmlSlimming,
+                exec_output_truncation: cfg.reduction.passOptions.execOutputTruncation,
+                agents_startup_optimization: cfg.reduction.passOptions.agentsStartupOptimization,
+                memory_fault_recovery: cfg.reduction.passOptions.memoryFaultRecovery,
+                format_slimming: cfg.reduction.passOptions.formatSlimming,
+                semantic_llmlingua2: cfg.reduction.passOptions.semanticLlmlingua2,
+                format_cleaning: cfg.reduction.passOptions.formatCleaning,
+                path_truncation: cfg.reduction.passOptions.pathTruncation,
+                image_downsample: cfg.reduction.passOptions.imageDownsample,
+                line_number_strip: cfg.reduction.passOptions.lineNumberStrip,
+              },
             );
             txt = sseResult.text;
             afterCallReduction = sseResult.reduction;
@@ -1959,16 +2951,37 @@ async function startEmbeddedResponsesProxy(
             skippedReason: "unsupported_response_shape",
           };
         }
+      } else if (proxyPureForward) {
+        afterCallReduction = {
+          changed: false,
+          savedChars: 0,
+          passCount: 0,
+          skippedReason: "proxy_pure_forward",
+        };
       }
       {
-        const proxyRespLogPath = join(cfg.stateDir, "ecoclaw", "proxy-responses.jsonl");
         const parsedResponse = parsedResponseForMirror;
+        const responseAt = new Date().toISOString();
+        const responseRequestId = createHash("sha1")
+          .update(JSON.stringify([
+            responseAt,
+            model,
+            upstreamModel,
+            payload?.prompt_cache_key ?? "",
+            parsedResponse?.id ?? "",
+            upstreamResp.status,
+          ]))
+          .digest("hex")
+          .slice(0, 16);
+        const proxyRespLogPath = join(cfg.stateDir, "ecoclaw", "proxy-responses.jsonl");
         const respRecord = {
-          at: new Date().toISOString(),
+          at: responseAt,
+          requestId: responseRequestId,
           stage: "proxy_response",
           model,
           upstreamModel,
           status: upstreamResp.status,
+          transport: upstreamResp.transport,
           promptCacheKey: payload?.prompt_cache_key,
           promptCacheRetention: payload?.prompt_cache_retention,
           responseId: parsedResponse?.id ?? null,
@@ -1976,10 +2989,26 @@ async function startEmbeddedResponsesProxy(
           responsePromptCacheKey: parsedResponse?.prompt_cache_key ?? null,
           responsePromptCacheRetention: parsedResponse?.prompt_cache_retention ?? null,
           usage: parsedResponse?.usage ?? null,
-          afterCallReduction,
+          afterCallReduction: afterCallReduction ?? null,
         };
         await mkdir(dirname(proxyRespLogPath), { recursive: true });
         await appendFile(proxyRespLogPath, `${JSON.stringify(respRecord)}\n`, "utf8");
+        await appendReductionPassTrace(cfg.stateDir, {
+          at: responseAt,
+          stage: "proxy_response",
+          model,
+          upstreamModel,
+          promptCacheKey: String(payload?.prompt_cache_key ?? ""),
+          requestId: responseRequestId,
+          report: afterCallReduction?.report ?? [],
+          extra: {
+            status: upstreamResp.status,
+            transport: upstreamResp.transport,
+            responseId: parsedResponse?.id ?? "",
+            responseReductionChanged: Boolean(afterCallReduction?.changed),
+            responseReductionSavedChars: Number(afterCallReduction?.savedChars ?? 0),
+          },
+        });
       }
       {
         const forwardedRecord = {
@@ -1987,6 +3016,7 @@ async function startEmbeddedResponsesProxy(
           stage: "proxy_forwarded",
           model,
           upstreamModel,
+          upstreamTransport: upstreamResp.transport,
           forwardedHasPrev: typeof payload?.previous_response_id === "string" && payload.previous_response_id.length > 0,
           forwardedPromptCacheKey:
             typeof payload?.prompt_cache_key === "string" ? payload.prompt_cache_key : null,
@@ -1999,7 +3029,8 @@ async function startEmbeddedResponsesProxy(
           forwardedReductionChangedItems: reductionApplied.changedItems,
           forwardedReductionChangedBlocks: reductionApplied.changedBlocks,
           forwardedReductionSavedChars: reductionApplied.savedChars,
-          afterCallReduction,
+          forwardedReductionReport: reductionApplied.report ?? null,
+          afterCallReduction: afterCallReduction ?? null,
           forwardedDeveloperChars:
             Array.isArray(payload?.input) &&
             payload.input.length > 0 &&
@@ -2022,6 +3053,7 @@ async function startEmbeddedResponsesProxy(
           model,
           upstreamModel,
           status: upstreamResp.status,
+          transport: upstreamResp.transport,
           responseId:
             typeof parsedResponse?.id === "string"
               ? parsedResponse.id
@@ -2057,7 +3089,7 @@ async function startEmbeddedResponsesProxy(
         await appendFile(cfg.debugTapPath, `${JSON.stringify(debugRecord)}\n`, "utf8");
       }
       res.statusCode = upstreamResp.status;
-      res.setHeader("content-type", upstreamResp.headers.get("content-type") ?? "application/json");
+      res.setHeader("content-type", upstreamResp.headers["content-type"] ?? "application/json");
       res.end(txt);
     } catch (err) {
       res.statusCode = 500;
@@ -2108,6 +3140,56 @@ function toJsonSafe(value: unknown, seen = new WeakSet<object>()): unknown {
 async function appendJsonl(path: string, payload: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify(toJsonSafe(payload))}\n`, "utf8");
+}
+
+async function appendReductionPassTrace(
+  stateDir: string,
+  payload: {
+    at: string;
+    stage: "proxy_inbound" | "proxy_response";
+    model: string;
+    upstreamModel: string;
+    promptCacheKey: string;
+    requestId: string;
+    report: Array<{
+      id: string;
+      phase: string;
+      target: string;
+      changed: boolean;
+      note?: string;
+      skippedReason?: string;
+      beforeChars?: number;
+      afterChars?: number;
+      touchedSegmentIds?: string[];
+    }>;
+    extra?: Record<string, unknown>;
+  },
+): Promise<void> {
+  if (!Array.isArray(payload.report) || payload.report.length === 0) return;
+  const tracePath = join(stateDir, "ecoclaw", "reduction-pass-trace.jsonl");
+  for (const entry of payload.report) {
+    const beforeChars = Number(entry.beforeChars ?? 0);
+    const afterChars = Number(entry.afterChars ?? beforeChars);
+    await appendJsonl(tracePath, {
+      at: payload.at,
+      stage: payload.stage,
+      requestId: payload.requestId,
+      model: payload.model,
+      upstreamModel: payload.upstreamModel,
+      promptCacheKey: payload.promptCacheKey,
+      passId: entry.id,
+      phase: entry.phase,
+      target: entry.target,
+      changed: entry.changed,
+      savedChars: Math.max(0, beforeChars - afterChars),
+      beforeChars,
+      afterChars,
+      touchedSegmentIds: entry.touchedSegmentIds ?? [],
+      note: entry.note ?? "",
+      skippedReason: entry.skippedReason ?? "",
+      ...(payload.extra ?? {}),
+    });
+  }
 }
 
 function resolveLlmHookTapPath(debugTapPath: string): string {
@@ -2201,6 +3283,350 @@ function hookOn(api: any, event: string, handler: (...args: any[]) => any): void
   if (typeof api.registerHook === "function") {
     api.registerHook(event, handler);
   }
+}
+
+type EcoCanonicalState = {
+  version: 1;
+  sessionId: string;
+  sourceMessageCount: number;
+  messages: any[];
+  updatedAt: string;
+};
+
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function applyBeforeToolCallDefaults(event: any): Record<string, unknown> {
+  const toolName = String(event?.toolName ?? event?.tool_name ?? "").trim().toLowerCase();
+  const params = event?.params && typeof event.params === "object"
+    ? { ...(event.params as Record<string, unknown>) }
+    : {};
+  if (toolName === "read") {
+    if (!isPositiveNumber(params.limit)) params.limit = 200;
+    if (!isPositiveNumber(params.offset)) params.offset = 1;
+    return params;
+  }
+  if (toolName === "web_fetch") {
+    if (!isPositiveNumber(params.maxChars)) params.maxChars = 12_000;
+  }
+  return params;
+}
+
+function isToolResultLikeMessage(message: Record<string, unknown>): boolean {
+  const role = String(message.role ?? "").toLowerCase();
+  const type = String(message.type ?? "").toLowerCase();
+  return (
+    role === "toolresult" ||
+    role === "tool" ||
+    type === "toolresult" ||
+    type === "tool_result" ||
+    type === "function_call_output"
+  );
+}
+
+function resolveToolNameFromPersistEvent(event: any): string {
+  return String(
+    event?.toolName ??
+      event?.tool_name ??
+      event?.message?.toolName ??
+      event?.message?.tool_name ??
+      "",
+  ).trim().toLowerCase();
+}
+
+function extractToolMessageText(message: Record<string, unknown>): string {
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const b = block as Record<string, unknown>;
+      if (typeof b.text === "string") return b.text;
+      if (typeof b.content === "string") return b.content;
+      return "";
+    })
+    .filter((v) => v.length > 0)
+    .join("\n");
+}
+
+function ensureContextSafeDetails(
+  details: unknown,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const base = details && typeof details === "object" ? { ...(details as Record<string, unknown>) } : {};
+  const contextSafe =
+    base.contextSafe && typeof base.contextSafe === "object"
+      ? { ...(base.contextSafe as Record<string, unknown>) }
+      : {};
+  base.contextSafe = { ...contextSafe, ...patch };
+  return base;
+}
+
+function buildToolResultPreview(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n[ecoclaw preview truncated]`;
+}
+
+function toolInlineLimit(toolName: string): number {
+  if (toolName === "read") return 12_000;
+  if (toolName === "exec" || toolName === "bash" || toolName === "web_fetch") return 4_000;
+  return 8_000;
+}
+
+function canonicalStatePath(stateDir: string, sessionId: string): string {
+  const safeSessionId = String(sessionId || "session").replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return join(stateDir, "ecoclaw", "canonical-state", `${safeSessionId}.json`);
+}
+
+async function loadCanonicalState(stateDir: string, sessionId: string): Promise<EcoCanonicalState | null> {
+  const path = canonicalStatePath(stateDir, sessionId);
+  try {
+    const raw = await readFile(path, "utf8");
+    const parsed = JSON.parse(raw) as EcoCanonicalState;
+    if (!parsed || parsed.version !== 1 || parsed.sessionId !== sessionId || !Array.isArray(parsed.messages)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function saveCanonicalState(stateDir: string, state: EcoCanonicalState): Promise<void> {
+  const path = canonicalStatePath(stateDir, state.sessionId);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(state, null, 2), "utf8");
+}
+
+function estimateMessagesChars(messages: any[]): number {
+  return messages.reduce((sum, msg) => sum + contentToText(msg?.content ?? "").length, 0);
+}
+
+function pruneCanonicalMessages(
+  messages: any[],
+  keepRecentToolResults: number,
+  placeholder: string,
+): { messages: any[]; changed: boolean } {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { messages: Array.isArray(messages) ? messages : [], changed: false };
+  }
+  const toolIndexes: number[] = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+    if (isToolResultLikeMessage(msg as Record<string, unknown>)) toolIndexes.push(i);
+  }
+  if (toolIndexes.length <= keepRecentToolResults) return { messages, changed: false };
+  const keepSet = new Set<number>(toolIndexes.slice(-keepRecentToolResults));
+  let changed = false;
+  const next = messages.map((msg, idx) => {
+    if (!msg || typeof msg !== "object") return msg;
+    if (!isToolResultLikeMessage(msg as Record<string, unknown>)) return msg;
+    if (keepSet.has(idx)) return msg;
+    const text = extractToolMessageText(msg as Record<string, unknown>);
+    if (text === placeholder) return msg;
+    changed = true;
+    return {
+      ...(msg as Record<string, unknown>),
+      content: placeholder,
+      details: ensureContextSafeDetails((msg as Record<string, unknown>).details, {
+        prunedByCanonical: true,
+        originalChars: text.length,
+      }),
+    };
+  });
+  return { messages: next, changed };
+}
+
+async function syncCanonicalState(params: {
+  stateDir: string;
+  sessionId: string;
+  rawMessages: any[];
+  pruneThresholdChars: number;
+  keepRecentToolResults: number;
+  placeholder: string;
+}): Promise<{ state: EcoCanonicalState; changed: boolean }> {
+  const loaded = await loadCanonicalState(params.stateDir, params.sessionId);
+  const rawMessages = Array.isArray(params.rawMessages) ? structuredClone(params.rawMessages) : [];
+  let messages: any[] = rawMessages;
+  let sourceMessageCount = rawMessages.length;
+  let changed = false;
+
+  if (loaded && loaded.sourceMessageCount <= rawMessages.length) {
+    if (loaded.sourceMessageCount < rawMessages.length) {
+      messages = [...loaded.messages, ...rawMessages.slice(loaded.sourceMessageCount)];
+      sourceMessageCount = rawMessages.length;
+      changed = true;
+    } else {
+      messages = loaded.messages;
+      sourceMessageCount = loaded.sourceMessageCount;
+    }
+  } else if (loaded) {
+    messages = rawMessages;
+    sourceMessageCount = rawMessages.length;
+    changed = true;
+  }
+
+  const currentChars = estimateMessagesChars(messages);
+  if (currentChars >= params.pruneThresholdChars) {
+    const pruned = pruneCanonicalMessages(messages, params.keepRecentToolResults, params.placeholder);
+    if (pruned.changed) {
+      messages = pruned.messages;
+      changed = true;
+    }
+  }
+
+  const state: EcoCanonicalState = {
+    version: 1,
+    sessionId: params.sessionId,
+    sourceMessageCount,
+    messages,
+    updatedAt: new Date().toISOString(),
+  };
+  if (!loaded) changed = true;
+  return { state, changed };
+}
+
+function createEcoClawContextEngine(
+  cfg: ReturnType<typeof normalizeConfig>,
+  logger: Required<PluginLogger>,
+) {
+  return {
+    info: {
+      id: "ecoclaw-context",
+      name: "EcoClaw Context Engine",
+      ownsCompaction: false,
+    },
+    async ingest() {
+      return { ingested: false };
+    },
+    async afterTurn(params: { sessionId: string; messages: any[] }) {
+      const synced = await syncCanonicalState({
+        stateDir: cfg.stateDir,
+        sessionId: params.sessionId,
+        rawMessages: params.messages,
+        pruneThresholdChars: cfg.contextEngine.pruneThresholdChars ?? 100_000,
+        keepRecentToolResults: cfg.contextEngine.keepRecentToolResults ?? 5,
+        placeholder: cfg.contextEngine.placeholder ?? "",
+      });
+      if (synced.changed) {
+        await saveCanonicalState(cfg.stateDir, synced.state);
+      }
+    },
+    async assemble(params: { sessionId: string; messages: any[]; tokenBudget?: number }) {
+      const synced = await syncCanonicalState({
+        stateDir: cfg.stateDir,
+        sessionId: params.sessionId,
+        rawMessages: params.messages,
+        pruneThresholdChars: cfg.contextEngine.pruneThresholdChars ?? 100_000,
+        keepRecentToolResults: cfg.contextEngine.keepRecentToolResults ?? 5,
+        placeholder: cfg.contextEngine.placeholder ?? "",
+      });
+      if (synced.changed) {
+        await saveCanonicalState(cfg.stateDir, synced.state);
+      }
+      const estimatedChars = estimateMessagesChars(synced.state.messages);
+      return {
+        messages: synced.state.messages,
+        estimatedTokens: Math.max(1, Math.ceil(estimatedChars / 4)),
+      };
+    },
+    async compact(params: { sessionId: string; messages?: any[]; force?: boolean }) {
+      const source = Array.isArray(params.messages) ? params.messages : [];
+      const synced = await syncCanonicalState({
+        stateDir: cfg.stateDir,
+        sessionId: params.sessionId,
+        rawMessages: source,
+        pruneThresholdChars: params.force ? 1 : (cfg.contextEngine.pruneThresholdChars ?? 100_000),
+        keepRecentToolResults: cfg.contextEngine.keepRecentToolResults ?? 5,
+        placeholder: cfg.contextEngine.placeholder ?? "",
+      });
+      if (synced.changed) {
+        await saveCanonicalState(cfg.stateDir, synced.state);
+      }
+      return {
+        ok: true,
+        compacted: synced.changed,
+        reason: synced.changed ? "ecoclaw canonical state updated" : "ecoclaw canonical state unchanged",
+      };
+    },
+  };
+}
+
+function applyToolResultPersistPolicy(
+  event: any,
+  cfg: ReturnType<typeof normalizeConfig>,
+  logger: Required<PluginLogger>,
+): { message: Record<string, unknown> } | undefined {
+  const message = event?.message;
+  if (!message || typeof message !== "object") return undefined;
+  const rawMessage = message as Record<string, unknown>;
+  if (!isToolResultLikeMessage(rawMessage)) return { message: rawMessage };
+
+  const toolName = resolveToolNameFromPersistEvent(event);
+  const text = extractToolMessageText(rawMessage);
+  const limit = toolInlineLimit(toolName);
+  if (text.length <= limit) {
+    return {
+      message: {
+        ...rawMessage,
+        details: ensureContextSafeDetails(rawMessage.details, {
+          resultMode: "inline",
+        }),
+      },
+    };
+  }
+
+  const digest = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const callId = String(event?.toolCallId ?? event?.tool_call_id ?? "").trim();
+  const toolPart = safeId(toolName || "tool");
+  const artifactFile = `${ts}-${toolPart}${callId ? `-${safeId(callId)}` : ""}-${digest}.json`;
+  const artifactPath = join(cfg.stateDir, "ecoclaw", "artifacts", toolPart, artifactFile);
+
+  let outputFile: string | undefined;
+  try {
+    mkdirSync(dirname(artifactPath), { recursive: true });
+    writeFileSync(
+      artifactPath,
+      JSON.stringify(
+        {
+          at: new Date().toISOString(),
+          toolName: toolName || undefined,
+          toolCallId: callId || undefined,
+          message: rawMessage,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    outputFile = artifactPath;
+  } catch (err) {
+    logger.warn(`[ecoclaw] tool_result_persist artifact write failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const preview = buildToolResultPreview(text, limit);
+  const notice = outputFile
+    ? `[ecoclaw persisted tool_result] full output moved to: ${outputFile}`
+    : "[ecoclaw persisted tool_result] artifact write failed, using inline preview fallback";
+
+  return {
+    message: {
+      ...rawMessage,
+      content: `${notice}\n\n${preview}`,
+      details: ensureContextSafeDetails(rawMessage.details, {
+        resultMode: outputFile ? "artifact" : "inline-fallback",
+        excludedFromContext: true,
+        outputFile,
+        originalChars: text.length,
+        previewChars: limit,
+        persistedBy: "ecoclaw.tool_result_persist",
+      }),
+    },
+  };
 }
 
 function maybeRegisterProxyProvider(
@@ -2625,6 +4051,7 @@ const __testHooks = {
   rewritePayloadForStablePrefix,
   applyProxyReductionToInput,
   stripInternalPayloadMarkers,
+  normalizeConfig,
 };
 
 module.exports = {
@@ -2640,6 +4067,25 @@ module.exports = {
     if (!cfg.enabled) {
       logger.info("[ecoclaw] Plugin disabled by config.");
       return;
+    }
+
+    if (cfg.hooks.beforeToolCall) {
+      hookOn(api, "before_tool_call", (event: any) => {
+        return { params: applyBeforeToolCallDefaults(event) };
+      });
+    }
+
+    if (cfg.hooks.toolResultPersist) {
+      hookOn(api, "tool_result_persist", (event: any) => {
+        const out = applyToolResultPersistPolicy(event, cfg, logger);
+        return out ?? { message: event?.message };
+      });
+    }
+
+    if (cfg.contextEngine.enabled && typeof api.registerContextEngine === "function") {
+      api.registerContextEngine("ecoclaw-context", () => createEcoClawContextEngine(cfg, logger));
+    } else if (cfg.contextEngine.enabled) {
+      logger.warn("[ecoclaw] registerContextEngine unavailable in this OpenClaw version.");
     }
 
     const topology = createSessionTopologyManager();
@@ -2683,28 +4129,37 @@ module.exports = {
     let proxyRuntime: Awaited<ReturnType<typeof startEmbeddedResponsesProxy>> | null = null;
     let proxyInitDone = false;
     let proxyInitPromise: Promise<void> | null = null;
+    let proxyLifecycleEpoch = 0;
 
     const ensureProxyReady = async (): Promise<void> => {
       if (proxyInitDone) return;
       if (proxyInitPromise) return proxyInitPromise;
+      const ensureEpoch = proxyLifecycleEpoch;
       proxyInitPromise = (async () => {
         const g = globalThis as any;
         const existing = g.__ecoclaw_embedded_proxy_runtime__;
         if (existing && existing.baseUrl && existing.upstream) {
+          if (ensureEpoch !== proxyLifecycleEpoch) return;
           proxyRuntime = existing;
           proxyInitDone = true;
           return;
         }
-        proxyRuntime = await startEmbeddedResponsesProxy(
+        const startedRuntime = await startEmbeddedResponsesProxy(
           cfg,
           logger,
         );
-        if (!proxyRuntime) return;
-        g.__ecoclaw_embedded_proxy_runtime__ = proxyRuntime;
-        maybeRegisterProxyProvider(api, cfg, logger, proxyRuntime.baseUrl, proxyRuntime.upstream);
-        await ensureExplicitProxyModelsInConfig(proxyRuntime.baseUrl, proxyRuntime.upstream, logger);
+        if (!startedRuntime) return;
+        if (ensureEpoch !== proxyLifecycleEpoch) {
+          await startedRuntime.close().catch(() => undefined);
+          return;
+        }
+        proxyRuntime = startedRuntime;
+        g.__ecoclaw_embedded_proxy_runtime__ = startedRuntime;
+        maybeRegisterProxyProvider(api, cfg, logger, startedRuntime.baseUrl, startedRuntime.upstream);
+        await ensureExplicitProxyModelsInConfig(startedRuntime.baseUrl, startedRuntime.upstream, logger);
         proxyInitDone = true;
       })().catch((err) => {
+        proxyInitDone = false;
         logger.warn(`[ecoclaw] embedded proxy init failed: ${err instanceof Error ? err.message : String(err)}`);
       }).finally(() => {
         proxyInitPromise = null;
@@ -2806,6 +4261,8 @@ module.exports = {
           logger.info(`[ecoclaw] State dir=${cfg.stateDir} debugTap=${cfg.debugTapProviderTraffic ? "on" : "off"}`);
         },
         stop: () => {
+          proxyLifecycleEpoch += 1;
+          const stopEpoch = proxyLifecycleEpoch;
           if (proxyRuntime) {
             void proxyRuntime.close().catch((err) => {
               logger.warn(
@@ -2818,6 +4275,21 @@ module.exports = {
             }
             proxyRuntime = null;
             proxyInitDone = false;
+          }
+          if (proxyInitPromise) {
+            void proxyInitPromise
+              .then(() => {
+                if (stopEpoch !== proxyLifecycleEpoch) return;
+                const g = globalThis as any;
+                const runtime = g.__ecoclaw_embedded_proxy_runtime__;
+                if (runtime && runtime !== proxyRuntime) {
+                  void runtime.close().catch(() => undefined);
+                  if (g.__ecoclaw_embedded_proxy_runtime__ === runtime) {
+                    delete g.__ecoclaw_embedded_proxy_runtime__;
+                  }
+                }
+              })
+              .catch(() => undefined);
           }
           logger.info("[ecoclaw] Plugin stopped.");
         },

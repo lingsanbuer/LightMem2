@@ -32,6 +32,10 @@ async function main() {
   const workerDest = join(process.cwd(), "dist", "semantic-llmlingua2-worker.py");
   await mkdir(dirname(workerDest), { recursive: true });
   await copyFile(workerSrc, workerDest);
+
+  const pluginManifestSrc = join(process.cwd(), "openclaw.plugin.json");
+  const pluginManifestDest = join(process.cwd(), "dist", "openclaw.plugin.json");
+  await copyFile(pluginManifestSrc, pluginManifestDest);
 }
 
 main().catch((err) => {

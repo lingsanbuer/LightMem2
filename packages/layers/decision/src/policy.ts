@@ -25,10 +25,11 @@ import {
   analyzeLineNumberStrip,
 } from "./reduction/index.js";
 import {
-  analyzeCompaction,
+  analyzeCompactionFromHistory,
   type CompactionDecision,
 } from "./compaction/index.js";
-import { analyzeEviction, type EvictionPolicy } from "./eviction/index.js";
+import { analyzeEvictionFromHistory, type EvictionPolicy } from "./eviction/index.js";
+import { buildHistoryView } from "@ecoclaw/layer-history";
 
 export type PolicyModuleConfig = {
   localityEnabled?: boolean;
@@ -696,8 +697,9 @@ function analyzePolicyBeforeBuild(
   const lineNumberStripDecision = analyzeLineNumberStrip(ctx.segments);
 
   // Analyze segments for compaction opportunities
-  const compactionDecision = analyzeCompaction(ctx.segments);
-  const evictionDecision = analyzeEviction(ctx.segments, {
+  const historyView = buildHistoryView(ctx);
+  const compactionDecision = analyzeCompactionFromHistory(historyView.blocks);
+  const evictionDecision = analyzeEvictionFromHistory(historyView.blocks, {
     enabled: config.evictionEnabled,
     policy: config.evictionPolicy,
     minBlockChars: config.evictionMinBlockChars,

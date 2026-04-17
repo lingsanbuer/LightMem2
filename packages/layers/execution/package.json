@@ -16,6 +16,7 @@
     "fixtures:ablation": "node --import tsx scripts/run-turn-local-ablation.ts"
   },
   "dependencies": {
-    "@ecoclaw/kernel": "workspace:*"
+    "@ecoclaw/kernel": "workspace:*",
+    "@ecoclaw/layer-decision": "workspace:*"
   }
 }

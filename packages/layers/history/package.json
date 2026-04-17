@@ -1,5 +1,5 @@
 {
-  "name": "@ecoclaw/layer-decision",
+  "name": "@ecoclaw/layer-history",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,12 +7,9 @@
   "types": "src/index.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test tests/**/*.test.ts"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@ecoclaw/layer-context": "workspace:*",
-    "@ecoclaw/layer-history": "workspace:*",
     "@ecoclaw/kernel": "workspace:*"
   }
 }

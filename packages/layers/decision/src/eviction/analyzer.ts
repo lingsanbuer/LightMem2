@@ -1,4 +1,4 @@
-import type { ContextSegment } from "@ecoclaw/kernel";
+import type { HistoryBlock } from "@ecoclaw/layer-history";
 import type { EvictionBlock, EvictionDecision, EvictionPolicy } from "../types.js";
 
 export type EvictionAnalyzerConfig = {
@@ -13,38 +13,36 @@ const DEFAULT_EVICTION_CONFIG: Required<EvictionAnalyzerConfig> = {
   minBlockChars: 256,
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  return value as Record<string, unknown>;
-}
-
-function buildBlocksFromSegments(
-  segments: ContextSegment[],
+function buildBlocksFromHistory(
+  blocks: HistoryBlock[],
   minBlockChars: number,
 ): EvictionBlock[] {
-  const blocks: EvictionBlock[] = [];
-  for (let i = 0; i < segments.length; i += 1) {
-    const segment = segments[i];
-    const chars = segment.text.length;
-    if (chars < minBlockChars) continue;
-    const metadata = asRecord(segment.metadata);
-    const blockType = typeof metadata?.origin === "string" ? metadata.origin : "segment";
-    blocks.push({
-      id: `segment-block:${segment.id}`,
-      messageIds: [segment.id],
-      blockType,
-      chars,
-      approxTokens: Math.max(0, Math.round(chars / 4)),
-      recencyRank: Math.max(0, segments.length - i),
-      frequency: 1,
-      metadata,
-    });
-  }
-  return blocks;
+  return blocks
+    .filter((block) => block.charCount >= minBlockChars)
+    .map((block, index) => ({
+      id: block.blockId,
+      messageIds: [...block.segmentIds],
+      blockType: block.blockType,
+      chars: block.charCount,
+      approxTokens: block.approxTokens,
+      recencyRank: Math.max(0, blocks.length - index),
+      frequency: block.signalTypes?.includes("REPEATED_READ") ? 2 : 1,
+      regenerationCost:
+        block.lifecycleState === "EVICTABLE"
+          ? Math.max(1, Math.round(block.charCount / 8))
+          : Math.max(1, Math.round(block.charCount / 16)),
+      metadata: {
+        ...(block.metadata ?? {}),
+        lifecycleState: block.lifecycleState,
+        toolName: block.toolName,
+        dataKey: block.dataKey,
+        signalTypes: block.signalTypes ?? [],
+      },
+    }));
 }
 
-export function analyzeEviction(
-  segments: ContextSegment[],
+export function analyzeEvictionFromHistory(
+  historyBlocks: HistoryBlock[],
   config: EvictionAnalyzerConfig = DEFAULT_EVICTION_CONFIG,
 ): EvictionDecision {
   const cfg = { ...DEFAULT_EVICTION_CONFIG, ...config };
@@ -59,18 +57,43 @@ export function analyzeEviction(
     };
   }
 
-  const blocks = buildBlocksFromSegments(segments, cfg.minBlockChars);
+  const blocks = buildBlocksFromHistory(historyBlocks, cfg.minBlockChars);
+  const candidates = historyBlocks.filter((block) =>
+    block.lifecycleState === "EVICTABLE"
+    && block.charCount >= cfg.minBlockChars,
+  );
+  const instructions =
+    cfg.policy === "noop"
+      ? []
+      : candidates.map((block, index) => ({
+          blockId: block.blockId,
+          confidence: 0.85,
+          priority: Math.max(1, 10 - index),
+          rationale:
+            block.transitionEvidence?.[0]?.reason
+            ?? `history block ${block.blockId} is eligible for eviction`,
+          estimatedSavedChars: block.charCount,
+          parameters: {
+            lifecycleState: block.lifecycleState,
+            blockType: block.blockType,
+            segmentIds: [...block.segmentIds],
+            toolName: block.toolName,
+            dataKey: block.dataKey,
+            signalTypes: block.signalTypes ?? [],
+          },
+        }));
+
   return {
     enabled: true,
     policy: cfg.policy,
     blocks,
-    instructions: [],
-    estimatedSavedChars: 0,
+    instructions,
+    estimatedSavedChars: instructions.reduce((sum, item) => sum + item.estimatedSavedChars, 0),
     notes: [
-      "eviction_interface_placeholder",
+      "source=history",
       `policy=${cfg.policy}`,
       `blocks=${blocks.length}`,
-      "instructions=0",
+      `instructions=${instructions.length}`,
     ],
   };
 }

@@ -1,152 +1,356 @@
 # EcoClaw
 
-EcoClaw is a runtime optimization layer for OpenClaw agents with one goal:
-improve token efficiency while keeping task quality stable.
+EcoClaw is a layered runtime optimization system for OpenClaw-style agents.
 
-## What This Version Adds
+The project is organized around five layers plus a thin plugin bridge. The core design principle is:
 
-- Embedded `openai-responses` proxy provider (`ecoclaw/*` explicit model keys)
-- Response root-link strategy for cache reuse (`previous_response_id` injection)
-- Policy-owned summary / compaction triggers with execution-side handoff artifacts
-- Runtime decision dashboard (replaces the old cache-tree-only view)
-- Expanded `/ecoclaw` command set (`help/status/cache/session` controls)
-- Full event tracing for Context / Decision / Execution / Orchestration analysis
+- `context` owns editable session/context state
+- `history` owns optimization-oriented history representation
+- `decision` owns structured policy decisions
+- `execution` owns concrete optimization actions
+- `orchestration` owns provider/session topology effects
+- `openclaw-plugin` is the current runtime bridge that intercepts OpenClaw traffic and wires the layers into the live system
 
-## High-Level Framework
+This separation matters because reduction, compaction, and eviction are not the same kind of work:
 
-EcoClaw is organized as semantic layers:
+- `reduction` is mostly local content rewriting
+- `compaction` is history representation change
+- `eviction` is lifecycle downgrade of already-compacted history
 
-- `packages/kernel`: runtime context, pipeline contracts, event bus
-- `packages/layers/context`: context-state, retrieval, and future session-view builders
-- `packages/layers/decision`: policy, task-router, decision-ledger
-- `packages/layers/execution`: stabilizer, compaction, summary, reduction
-- `packages/layers/orchestration`: OpenClaw connector and session topology
-- `packages/providers/*`: provider-specific usage normalization and prompt annotation
-- `packages/storage/fs`: filesystem persistence for traces, turns, branches, and messages
-- `packages/openclaw-plugin`: deployable OpenClaw plugin entry
-- `apps/lab-bench`: benchmark harness and runtime dashboard
+They share some infrastructure, but they should not collapse into one layer.
 
-Detailed architecture: [docs/architecture.md](/mnt/20t/xubuqiang/EcoClaw/EcoClaw/docs/architecture.md)
+## Current Layer Model
 
-## Quick Start
+### 1. `context`
+Path:
+- `packages/layers/context`
 
-Recommended release-mode install:
+Responsibilities:
+- Build the current editable session view from storage/canonical state
+- Expose message/branch-oriented context state for UI, decision, and orchestration
+- Support draft-style context transforms
+- Treat summary/checkpoint/handoff as context artifacts rather than magical side memory
 
-```bash
-cd packages/openclaw-plugin
-npm run install:release
-```
+Non-responsibilities:
+- No upstream API calls
+- No provider-specific fork/replay mechanics
+- No optimization policy decisions
+- No direct compaction/eviction execution
 
-This flow:
+### 2. `history`
+Path:
+- `packages/layers/history`
 
-- builds a self-contained plugin archive
-- removes any conflicting dev `plugins.load.paths` entry
-- installs the archive into `~/.openclaw/extensions/ecoclaw`
-- restarts the gateway
+Responsibilities:
+- Derive optimization-oriented `HistoryBlock[]` from `RuntimeTurnContext.segments`
+- Provide shared history chunking for reduction-adjacent history transforms, compaction, and eviction
+- Provide shared rule signals and lightweight scoring
+- Provide lifecycle-oriented history representation without owning policy or execution
+- Own the shared lifecycle/state-machine representation for history blocks
 
-If you are actively developing the plugin, use dev-mode instead and do not keep
-release-mode enabled at the same time. OpenClaw will treat both as the same
-plugin id and report duplicate-source conflicts.
+Non-responsibilities:
+- No upstream I/O
+- No provider/session topology actions
+- No direct archive writes
+- No final decision making by itself
 
-1. Install dependencies and build:
+Why this layer exists:
+- `HistoryBlock` is not a pure context model
+- `HistoryBlock` is not an orchestration object
+- `HistoryBlock` is a shared intermediate representation used by both decision and execution
 
-```bash
-npm install
-npm run build
-```
+Lifecycle ownership:
+- `history` owns the shared lifecycle model itself:
+  - block states
+  - lifecycle labels
+  - transition eligibility
+- `history` does not own the actions triggered by those transitions
+- transition-triggered actions still belong to `execution`
 
-2. Development-mode install into OpenClaw:
+Current intended lifecycle scope:
+- first version: block-oriented lifecycle (`ACTIVE -> COMPACTABLE -> COMPACTED -> EVICTABLE -> EVICTED_*`)
+- future versions may add richer task/phase abstractions, but they should still remain part of shared history IR rather than execution code
 
-```bash
-cd packages/openclaw-plugin
-npm run build
-openclaw config set plugins.load.paths "[\"/abs/path/to/EcoClaw/packages/openclaw-plugin\"]"
-openclaw config set plugins.allow "[\"ecoclaw\"]"
-openclaw config set plugins.entries.ecoclaw.enabled true
-openclaw gateway restart
-```
+### 3. `decision`
+Path:
+- `packages/layers/decision`
 
-3. Use explicit EcoClaw provider model in OpenClaw:
+Responsibilities:
+- Convert context/history signals into structured policy outputs
+- Own model-based strategic judgment when semantic boundary detection requires an LLM call
+- Produce:
+  - `policy.decisions.reduction`
+  - `policy.decisions.compaction`
+  - `policy.decisions.eviction`
+- Keep policy outputs explicit, inspectable, and replayable
+- Estimate savings / ROI / rationale / confidence where applicable
 
-```text
-ecoclaw/gpt-5.4
-```
+Non-responsibilities:
+- No direct mutation of context/session state
+- No archive writes
+- No provider fork/branch application
 
-Plugin usage and command guide: [packages/openclaw-plugin/README.md](/mnt/20t/xubuqiang/EcoClaw/EcoClaw/packages/openclaw-plugin/README.md)
+Signal ownership:
+- rule-visible signals belong to `history`
+  - chunking
+  - structural/rule detection
+  - repeated-read / consumed-by-write / large-block / recency signals
+- model-visible signals belong to `decision`
+  - semantic phase boundary
+  - plan revision
+  - retrieved-content-consumed style judgments
 
-## Runtime Dashboard
+Rationale:
+- model invocation is policy work, not representation derivation
+- therefore the future small-model detector should live in `decision`, not in `history`
 
-```bash
-cd apps/lab-bench
-corepack pnpm --filter @ecoclaw/lab-bench dev
-# open http://127.0.0.1:7777
-```
+### 4. `execution`
+Path:
+- `packages/layers/execution`
 
-The dashboard focuses on:
+Responsibilities:
+- Apply concrete transformation actions based on policy decisions
+- Own local transform implementations:
+  - reduction passes
+  - compaction actions
+  - eviction actions
+- Own shared execution-side primitives such as:
+  - `atomic/archive-recovery`
 
-- Per-turn token usage (input/output/cacheRead/net)
-- Layer signals and module execution traces
-- Compaction ROI windows (pre/post turn comparison)
-- Initial vs final context segment inspection
-- Stable-prefix / tail visualization for cache-oriented observation
+Non-responsibilities:
+- No final policy choice
+- No provider topology changes
+- No direct ownership of canonical session truth
 
-Useful overrides:
+### 5. `orchestration`
+Path:
+- `packages/layers/orchestration`
 
-```bash
-ECOCLAW_LAB_PORT=7781 \
-ECOCLAW_STATE_ROOTS="$HOME/.openclaw/ecoclaw-plugin-state/ecoclaw:/tmp/ecoclaw-lab-state/ecoclaw" \
-corepack pnpm --filter @ecoclaw/lab-bench dev
-```
+Responsibilities:
+- Apply decisions that have session-topology consequences
+- Own provider/OpenClaw-specific branch, fork, replay, rebind, and materialization behavior
+- Connect execution artifacts back into the OpenClaw workflow when physical session effects are needed
 
-Current scope of the dashboard:
+Non-responsibilities:
+- No low-level optimization transforms
+- No ownership of intermediate history representation
+- No direct scoring/policy analysis
 
-- observation only
-- reads trace + provider tap files from local state roots
-- does not yet write policy overrides or mutate runtime context
+Current priority note:
+- `orchestration` is architecturally valid, but it is not the current implementation focus
+- for the near-term compaction/eviction work, the main path is:
+  - `history -> decision -> execution`
+- `orchestration` should be treated as a reserved extension point for future topology-affecting workflows
+  - multi-agent transfer
+  - branch/fork materialization
+  - replay rebinding
 
-## Current Scope
+For the current plugin-centered runtime:
+- OpenClaw itself still owns most session-topology behavior
+- EcoClaw should avoid over-designing orchestration before the history/decision/execution path is stable
 
-The current production path is intentionally narrow:
+## Supporting Pieces
 
-- Active provider adapters: `openai`, `anthropic`
-- Active plugin runtime path: `packages/openclaw-plugin`
-- Active persistence path: `packages/storage/fs`
+### `kernel`
+Path:
+- `packages/kernel`
 
-Some higher-level modules such as `retrieval` and `task-router` are kept as
-clean layer boundaries, but they are not yet deeply wired into the production
-OpenClaw plugin path.
+Responsibilities:
+- Shared runtime types and pipeline interfaces
+- Common `RuntimeTurnContext`, `ContextSegment`, `RuntimeTurnResult`, tracing, and event helpers
 
-## Benchmarking
+### `openclaw-plugin`
+Path:
+- `packages/openclaw-plugin`
 
-PinchBench examples:
+Responsibilities:
+- Runtime bridge into the live OpenClaw process
+- Intercept request/response traffic through the embedded proxy
+- Build the current `RuntimeTurnContext`
+- Call reduction bridges today
+- Persist traces and reports for benchmark/debugging
 
-```bash
-# baseline
-./experiments/scripts/run_pinchbench_baseline.sh --model gmn/gpt-5.4 --suite all --runs 1 --parallel 1
+Important nuance:
+- The plugin is currently both a transport bridge and a temporary layer-integration bridge
+- Some decisions are still assembled inside the plugin rather than coming from the full online policy module
 
-# with EcoClaw proxy provider
-./experiments/scripts/run_pinchbench_baseline.sh --model ecoclaw/gpt-5.4 --suite all --runs 1 --parallel 1
-```
+That is acceptable for the current reduction stage, but should not be the long-term pattern for compaction/eviction
 
-## Summary Prompt Overrides
+## Data Flow
 
-For `lab-bench` and other direct runtime hosts, `module-summary` now supports:
+### Current live reduction path
+1. OpenClaw assembles a request
+2. `openclaw-plugin` intercepts it via embedded proxy
+3. plugin constructs a `RuntimeTurnContext`-like view from request input
+4. plugin currently builds reduction-flavored policy metadata in-place
+5. `execution/reduction` reads `turnCtx.metadata.policy.decisions.reduction.instructions`
+6. execution applies passes
+7. plugin forwards rewritten request upstream
+8. after-call reduction may run on the response
+9. plugin logs pass-level traces and benchmark reports
 
-- `summaryPrompt`: inline override
-- `summaryPromptPath`: prompt file path override
-- `resumePrefixPrompt`: inline override
-- `resumePrefixPromptPath`: prompt file path override
+This means:
+- reduction already uses the `policy` data shape
+- but reduction is not yet fully driven by the online `decision` runtime module
+- the plugin currently acts as a bridge that assembles compatible reduction decisions
 
-`lab-bench` exposes these via environment variables:
+### Target compaction / eviction path
+1. OpenClaw/plugin builds `RuntimeTurnContext`
+2. `history` derives `HistoryBlock[]` from segments
+3. `history` derives rule-visible signals and lifecycle state from `HistoryBlock[]`
+4. `decision` analyzes `HistoryBlock[]` plus history signals and emits:
+   - `policy.decisions.compaction`
+   - `policy.decisions.eviction`
+5. `decision` may additionally invoke model-based detectors when semantic judgment is actually needed
+6. `execution` reads those decisions and performs concrete actions
+7. `execution` uses `atomic/archive-recovery` to materialize stubs / pointers / recovery handles
+8. `orchestration` applies topology-level effects only if/when such effects are actually needed
 
-```bash
-ECOCLAW_SUMMARY_PROMPT_PATH=/abs/path/summary-prompt.txt
-ECOCLAW_RESUME_PREFIX_PROMPT_PATH=/abs/path/resume-prefix.txt
-```
+This is the intended clean direction:
+- decision decides
+- execution acts
+- orchestration applies topology effects
 
-Or inline:
+## Current Reality: What Is Fully Wired vs Bridged
 
-```bash
-ECOCLAW_SUMMARY_PROMPT="Write a compact handoff with explicit pending steps."
-ECOCLAW_RESUME_PREFIX_PROMPT="Use this prior summary as the starting point:"
-```
+### Reduction
+Status:
+- Stage-complete enough for current experiments
+- Fully observable
+- Configurable via plugin config
+- Execution side is real
+- Policy shape is real
+- Online policy source is still partially bridged by plugin logic
+
+In other words:
+- reduction is not fake
+- but it is not yet the purest possible `decision -> execution` path
+
+This is acceptable because the reduction goal was to first achieve:
+- stable online behavior
+- benchmark validation
+- pass-level observability
+- configuration control
+
+### Compaction
+Status:
+- History-backed on the decision side
+- Live plugin path already runs:
+  - `policy.beforeBuild`
+  - `compaction.beforeCall`
+- Execution already performs real archive + stub replacement for turn-local compaction
+- This is no longer a placeholder-only path
+- Future work is about richer strategies, not first-time wiring
+
+### Eviction
+Status:
+- History-backed on the decision side
+- Live plugin path already runs:
+  - `policy.beforeBuild`
+  - `eviction.beforeCall`
+- Execution now performs a conservative real apply:
+  - archive original segment
+  - replace with a recoverable cached-pointer stub
+- Current eviction is still v1:
+  - cached-pointer eviction is implemented
+  - hard-drop eviction is intentionally deferred
+- Eviction should still evolve together with compaction because both depend on the same history representation and lifecycle semantics
+
+## Why `history` Was Added
+
+Before adding `history`, the architecture had an ambiguity:
+- `context` was too session-oriented to serve as the optimization IR
+- `execution` was too action-oriented to own the shared history representation
+- `orchestration` was too topology-oriented to own block semantics
+
+`history` resolves that ambiguity.
+
+It is the shared intermediate representation layer between:
+- `context`
+- `decision`
+- `execution`
+
+Conceptually:
+- `context` answers: what is the current editable session view?
+- `history` answers: how should that history be chunked/scored for optimization?
+- `decision` answers: what should be done?
+- `execution` answers: how is it done?
+- `orchestration` answers: how are external/session consequences applied?
+
+## Current `history` Scope
+
+The first version of `history` is intentionally lightweight.
+
+Current exports:
+- `HistoryBlock`
+- `HistorySignal`
+- `buildHistoryBlocks(...)`
+- `collectRuleSignals(...)`
+- `scoreHistoryBlocks(...)`
+
+This first version is enough to:
+- avoid mixing optimization IR into `context` or `execution`
+- give compaction/eviction a shared starting point
+- prepare decision analyzers to consume block-oriented inputs later
+
+It is not yet the full final lifecycle engine, but lifecycle ownership belongs here.
+
+## Compaction / Eviction Direction
+
+### Shared front-end
+Compaction and eviction should share:
+- `HistoryBlock[]`
+- rule signals
+- lightweight scoring
+- lifecycle labels
+
+### Separate decisions
+They should still produce separate decisions:
+- `CompactionDecision`
+- `EvictionDecision`
+
+### Separate actions
+They should still execute separately:
+- compaction changes representation
+- eviction downgrades already-compacted history into cached or dropped forms
+
+### Shared execution primitive
+Both should reuse:
+- `execution/atomic/archive-recovery`
+
+This prevents duplication of:
+- archive writes
+- pointer/placeholder generation
+- deferred recovery wiring
+
+## Current Architectural Gaps
+
+These are the main known gaps that still need cleanup:
+
+1. Reduction still relies on plugin-side bridge logic to assemble policy-compatible metadata
+- acceptable for now
+- should not be copied into compaction/eviction
+
+2. Eviction currently implements only the recoverable cached-pointer path, not stronger dropped semantics
+
+3. Full online policy module is not yet the sole source of all live optimization decisions
+
+## Immediate Implementation Direction
+
+The next clean steps are:
+1. Keep `history` as the shared lifecycle-aware IR for compaction and eviction
+2. Add decision-owned model detectors only where semantic judgment is actually needed
+3. Evolve eviction beyond cached-pointer apply only after the v1 path is stable
+4. Keep reduction stable; do not do a risky reduction re-architecture before compaction/eviction experience is complete
+
+## Summary
+
+The intended long-term dependency direction is:
+
+- `context` -> `history` -> `decision` -> `execution` -> `orchestration`
+
+with:
+- `kernel` as shared runtime types
+- `openclaw-plugin` as the current live integration bridge
+
+This is the architecture we should preserve while finishing compaction and eviction.

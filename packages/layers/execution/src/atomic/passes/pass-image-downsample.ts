@@ -111,8 +111,14 @@ export const imageDownsamplePass: ReductionPassHandler = {
 
     // Get thresholds from instruction parameters or spec
     const instrParams = imageDownsampleInstructions[0]?.parameters ?? {};
-    const maxImageSizeKB = (instrParams.maxImageSizeKB as number) ?? 100;
-    const maxSvgSizeKB = (instrParams.maxSvgSizeKB as number) ?? 50;
+    const maxImageSizeKB =
+      (instrParams.maxImageSizeKB as number)
+      ?? (typeof spec.options?.maxImageSizeKB === "number" ? spec.options.maxImageSizeKB : undefined)
+      ?? 100;
+    const maxSvgSizeKB =
+      (instrParams.maxSvgSizeKB as number)
+      ?? (typeof spec.options?.maxSvgSizeKB === "number" ? spec.options.maxSvgSizeKB : undefined)
+      ?? 50;
 
     const { content, changed, downsampledCount, savedChars } = applyImageDownsample(
       currentResult.content,

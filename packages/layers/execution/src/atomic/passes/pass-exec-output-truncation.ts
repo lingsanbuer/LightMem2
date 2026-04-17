@@ -1,7 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import type { ContextSegment, RuntimeTurnContext } from "@ecoclaw/kernel";
 import type { ReductionPassHandler } from "../../composer/reduction/types.js";
+import {
+  archiveContent,
+  buildRecoveryHint,
+} from "../archive-recovery/index.js";
 
 // =============================================================================
 // Per-Tool Threshold Configuration
@@ -80,9 +82,6 @@ const resolveConfig = (options?: Record<string, unknown>): ExecOutputTruncationC
 const clipText = (value: string, maxChars: number): string =>
   value.length <= maxChars ? value : `${value.slice(0, maxChars)}...`;
 
-const sanitizePathPart = (value: string): string =>
-  value.replace(/[^a-zA-Z0-9._-]+/g, "_");
-
 const asObject = (value: unknown): Record<string, unknown> | undefined =>
   !value || typeof value !== "object" || Array.isArray(value) ? undefined : value as Record<string, unknown>;
 
@@ -116,24 +115,6 @@ const extractDataKey = (metadata: Record<string, unknown> | undefined): string |
 };
 
 // =============================================================================
-// Archive Directory Resolution
-// =============================================================================
-
-const defaultArchiveDir = (sessionId: string, workspaceDir?: string): string => {
-  if (workspaceDir) {
-    return join(workspaceDir, ".ecoclaw-archives");
-  }
-  const match = sessionId.match(/-(\d+)-j(\d+)$/);
-  if (match) {
-    const runId = match[1];
-    const jobId = match[2];
-    return `/tmp/pinchbench/${runId}/agent_workspace_j${jobId}/.ecoclaw-archives`;
-  }
-  const homeDir = process.env.HOME || process.env.USERPROFILE || ".";
-  return join(homeDir, ".openclaw", "ecoclaw-plugin-state", "ecoclaw", "tool-result-archives", sanitizePathPart(sessionId));
-};
-
-// =============================================================================
 // Archive and Truncation Logic
 // =============================================================================
 
@@ -149,8 +130,7 @@ const buildTruncationStub = (
   tailSize: number,
 ): string => {
   return (
-    `[${toolName} output truncated] Original: ${originalSize.toLocaleString()} chars. ` +
-    `Full output saved to: ${archivePath}\n\n` +
+    `[${toolName} output truncated] Original: ${originalSize.toLocaleString()} chars.\n\n` +
     `Preview shows first ${headSize.toLocaleString()} + last ${tailSize.toLocaleString()} chars:\n\n` +
     `=== BEGIN PREVIEW (first ${headSize.toLocaleString()} chars) ===\n` +
     `${headPreview}\n` +
@@ -158,10 +138,13 @@ const buildTruncationStub = (
     `[${omittedChars.toLocaleString()} chars omitted]\n\n` +
     `=== BEGIN PREVIEW (last ${tailSize.toLocaleString()} chars) ===\n` +
     `${tailPreview}\n` +
-    `=== END PREVIEW ===\n\n` +
-    `💡 To read more, use the read tool:\n` +
-    `  • Read next section: \`read ${archivePath} --offset ${headSize} --limit 2000\`\n` +
-    `  • Read full file: \`read ${archivePath}\``
+    `=== END PREVIEW ===` +
+    buildRecoveryHint({
+      dataKey,
+      originalSize,
+      archivePath,
+      sourceLabel: `${toolName} output truncated`,
+    })
   );
 };
 
@@ -192,31 +175,19 @@ const truncateExecOutput = async (
     return { text: segment.text, changed: false };
   }
 
-  const archiveDir = config.archiveDir ?? defaultArchiveDir(sessionId, workspaceDir);
-  const timestamp = Date.now();
-  const fileName = `${timestamp}-${sanitizePathPart(segment.id)}.json`;
-  const archivePath = join(archiveDir, fileName);
-
-  await mkdir(dirname(archivePath), { recursive: true });
-  await writeFile(
-    archivePath,
-    `${JSON.stringify(
-      {
-        schemaVersion: 1,
-        kind: "exec_output_archive",
-        sessionId,
-        segmentId: segment.id,
-        toolName,
-        dataKey,
-        originalText: segment.text,
-        originalSize: segment.text.length,
-        archivedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+  const { archivePath } = await archiveContent({
+    sessionId,
+    segmentId: segment.id,
+    sourcePass: "exec_output_truncation",
+    toolName,
+    dataKey,
+    originalText: segment.text,
+    workspaceDir,
+    archiveDir: config.archiveDir,
+    metadata: {
+      threshold,
+    },
+  });
 
   const fullText = segment.text;
   const headPreview = clipText(fullText, config.headPreviewSize);
@@ -353,6 +324,8 @@ const updateSegments = async (
             ...(meta.reduction as Record<string, unknown> ?? {}),
             execOutputTruncation: {
               archived: true,
+              dataKey: extractDataKey(meta),
+              archivePath: result.archivePath,
               originalSize: result.originalSize,
               truncatedSize: result.text.length,
             },

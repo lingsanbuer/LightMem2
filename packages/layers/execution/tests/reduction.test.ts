@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ECOCLAW_EVENT_TYPES, findRuntimeEventsByType } from "@ecoclaw/kernel";
 import { createReductionModule } from "../src/composer/reduction/index.js";
 import { createMockRuntime, createTurnContext, createTurnResult } from "./test-utils.js";
@@ -317,6 +320,71 @@ test("reduction skips tool_payload_trim when no policy instructions provided", a
   assert.equal(toolPayloadPass.skippedReason, "no_policy_instructions");
 });
 
+test("reduction skips tool payload trim when recovery placeholder would not save chars", async () => {
+  const module = createReductionModule({
+    maxToolChars: 40,
+    semanticLlmlingua2: { enabled: false },
+  });
+  const runtime = createMockRuntime();
+  const smallStdout = [
+    "row-01 short",
+    "row-02 short",
+    "row-03 short",
+    "row-04 short",
+    "row-05 short",
+    "row-06 short",
+  ].join("\n");
+  const ctx = createTurnContext({
+    sessionId: "bench-0001-j0001",
+    segments: [
+      {
+        id: "tool-json-small",
+        kind: "volatile",
+        text: smallStdout,
+        priority: 4,
+        source: "tool",
+        metadata: {
+          role: "tool",
+          toolPayload: {
+            toolName: "exec",
+            path: "/tmp/pinchbench/0001/agent_workspace_j0001/out.json",
+          },
+        },
+      },
+    ],
+    metadata: {
+      workspaceDir: "/tmp/pinchbench/0001/agent_workspace_j0001",
+      policy: {
+        version: "v2",
+        mode: "online",
+        decisions: {
+          reduction: {
+            enabled: true,
+            beforeCallPassIds: ["tool_payload_trim"],
+            afterCallPassIds: [],
+            instructions: [
+              {
+                strategy: "tool_payload_trim",
+                segmentIds: ["tool-json-small"],
+                parameters: { payloadKind: "stdout" },
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  const before = await module.beforeCall!(ctx, runtime);
+  assert.equal(before.segments[0]!.text, smallStdout);
+  const reductionMeta = before.metadata?.reduction as Record<string, unknown>;
+  const beforeCallSummary = reductionMeta?.beforeCallSummary as Record<string, unknown>;
+  const passBreakdown = (beforeCallSummary?.passBreakdown as Array<Record<string, unknown>>) ?? [];
+  const toolPayloadPass = passBreakdown.find((p) => p.id === "tool_payload_trim");
+  assert.ok(toolPayloadPass);
+  assert.equal(toolPayloadPass.skippedReason, "no_net_savings");
+});
+
 test("reduction trims large stdout payload from real transcript: memory task", async () => {
   // From task_08_memory-transcript.txt: read returns a ~1000 byte project notes document
   // This is a real pattern: large tool payload that can be trimmed
@@ -418,6 +486,254 @@ test("reduction trims large stdout payload from real transcript: memory task", a
     findRuntimeEventsByType(before.metadata, ECOCLAW_EVENT_TYPES.REDUCTION_BEFORE_CALL_RECORDED).length,
     1,
   );
+});
+
+test("tool payload trim archives original content and memory fault recovery restores it", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ecoclaw-archive-recovery-"));
+  const module = createReductionModule({
+    maxToolChars: 120,
+    semanticLlmlingua2: { enabled: false },
+    passes: [
+      {
+        id: "tool_payload_trim",
+        phase: "before_call",
+        target: "tool_payload",
+        options: { maxChars: 120, noteLabel: "rule" },
+      },
+      {
+        id: "memory_fault_recovery",
+        phase: "before_call",
+        target: "context_segment",
+        options: { stateDir, maxRecoveriesPerTurn: 10 },
+      },
+    ],
+  });
+  const runtime = createMockRuntime();
+  const originalText = Array.from({ length: 36 }, (_, index) => `line-${index} repeated diagnostic detail`).join("\n");
+
+  const beforeCtx = createTurnContext({
+    sessionId: "bench-9999-j0001",
+    segments: [
+      {
+        id: "tool-read-big",
+        kind: "volatile",
+        text: originalText,
+        priority: 4,
+        source: "tool",
+        metadata: {
+          role: "tool",
+          toolPayload: {
+            enabled: true,
+            toolName: "read",
+            path: "/tmp/pinchbench/9999/agent_workspace_j0001/memory/MEMORY.md",
+          },
+        },
+      },
+    ],
+    metadata: {
+      workspaceDir: "/tmp/pinchbench/9999/agent_workspace_j0001",
+      policy: {
+        version: "v2",
+        mode: "online",
+        decisions: {
+          reduction: {
+            enabled: true,
+            beforeCallPassIds: ["tool_payload_trim", "memory_fault_recovery"],
+            afterCallPassIds: [],
+            instructions: [
+              {
+                strategy: "tool_payload_trim",
+                segmentIds: ["tool-read-big"],
+                parameters: { payloadKind: "stdout" },
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  const trimmed = await module.beforeCall!(beforeCtx, runtime);
+  const trimmedText = trimmed.segments[0]!.text;
+  assert.match(trimmedText, /Tool payload trimmed/);
+  assert.match(trimmedText, /memory_fault\('\/tmp\/pinchbench\/9999\/agent_workspace_j0001\/memory\/MEMORY\.md'\)/);
+  const archivePathMatch = trimmedText.match(/Archive:\s+([^\n]+)/);
+  assert.ok(archivePathMatch?.[1], "archive path should be included in trimmed text");
+  const archivePath = archivePathMatch[1]!.trim();
+  const archiveRaw = await readFile(archivePath, "utf8");
+  assert.match(archiveRaw, /"sourcePass": "tool_payload_trim"/);
+
+  const faultDir = join(stateDir, "ecoclaw", "fault-recovery");
+  const faultPath = join(faultDir, "bench-9999-j0001.json");
+  await readFile(archivePath, "utf8");
+  await import("node:fs/promises").then(({ mkdir, writeFile }) =>
+    mkdir(faultDir, { recursive: true }).then(() =>
+      writeFile(
+        faultPath,
+        JSON.stringify({
+          pendingRecoveries: [
+            {
+              dataKey: "/tmp/pinchbench/9999/agent_workspace_j0001/memory/MEMORY.md",
+              archivePath,
+              requestedAt: Date.now(),
+              turnId: "turn-2",
+            },
+          ],
+        }, null, 2),
+        "utf8",
+      )));
+
+  const recoveryCtx = createTurnContext({
+    sessionId: "bench-9999-j0001",
+    segments: trimmed.segments,
+    metadata: {
+      workspaceDir: "/tmp/pinchbench/9999/agent_workspace_j0001",
+      policy: {
+        version: "v2",
+        mode: "online",
+        decisions: {
+          reduction: {
+            enabled: true,
+            beforeCallPassIds: ["memory_fault_recovery"],
+            afterCallPassIds: [],
+            instructions: [],
+          },
+        },
+      },
+    },
+  });
+
+  const recovered = await module.beforeCall!(recoveryCtx, runtime);
+  const recoverySegment = recovered.segments.find((segment) => segment.source === "memory_fault_recovery");
+  assert.ok(recoverySegment, "recovery segment should be appended");
+  assert.match(recoverySegment!.text, /Recovered content for/);
+  assert.match(recoverySegment!.text, /Archived by: tool_payload_trim/);
+  assert.match(recoverySegment!.text, /line-0 repeated diagnostic detail/);
+});
+
+test("exec output truncation archives original content and memory fault recovery restores it", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ecoclaw-exec-recovery-"));
+  const module = createReductionModule({
+    semanticLlmlingua2: { enabled: false },
+    passes: [
+      {
+        id: "exec_output_truncation",
+        phase: "before_call",
+        target: "context_segment",
+        options: {
+          enabled: true,
+          headPreviewSize: 80,
+          tailPreviewSize: 60,
+          toolThresholds: { bash: 200 },
+        },
+      },
+      {
+        id: "memory_fault_recovery",
+        phase: "before_call",
+        target: "context_segment",
+        options: { stateDir, maxRecoveriesPerTurn: 10 },
+      },
+    ],
+  });
+  const runtime = createMockRuntime();
+  const originalText = Array.from({ length: 60 }, (_, index) => `stderr line ${index} with verbose shell output`).join("\n");
+
+  const beforeCtx = createTurnContext({
+    sessionId: "bench-9998-j0001",
+    segments: [
+      {
+        id: "tool-bash-big",
+        kind: "volatile",
+        text: originalText,
+        priority: 4,
+        source: "tool",
+        metadata: {
+          role: "tool",
+          toolName: "bash",
+          toolPayload: {
+            enabled: true,
+            toolName: "bash",
+            path: "/tmp/pinchbench/9998/agent_workspace_j0001/logs/build.log",
+          },
+        },
+      },
+    ],
+    metadata: {
+      workspaceDir: "/tmp/pinchbench/9998/agent_workspace_j0001",
+      policy: {
+        version: "v2",
+        mode: "online",
+        decisions: {
+          reduction: {
+            enabled: true,
+            beforeCallPassIds: ["exec_output_truncation", "memory_fault_recovery"],
+            afterCallPassIds: [],
+            instructions: [
+              {
+                strategy: "exec_output_truncation",
+                segmentIds: ["tool-bash-big"],
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  const truncated = await module.beforeCall!(beforeCtx, runtime);
+  const truncatedText = truncated.segments[0]!.text;
+  assert.match(truncatedText, /\[bash output truncated\]/);
+  assert.match(truncatedText, /memory_fault\('\/tmp\/pinchbench\/9998\/agent_workspace_j0001\/logs\/build\.log'\)/);
+  const archivePathMatch = truncatedText.match(/Archive:\s+([^\n]+)/);
+  assert.ok(archivePathMatch?.[1], "archive path should be included in truncation text");
+  const archivePath = archivePathMatch[1]!.trim();
+  const archiveRaw = await readFile(archivePath, "utf8");
+  assert.match(archiveRaw, /"sourcePass": "exec_output_truncation"/);
+
+  const faultDir = join(stateDir, "ecoclaw", "fault-recovery");
+  const faultPath = join(faultDir, "bench-9998-j0001.json");
+  await import("node:fs/promises").then(({ mkdir, writeFile }) =>
+    mkdir(faultDir, { recursive: true }).then(() =>
+      writeFile(
+        faultPath,
+        JSON.stringify({
+          pendingRecoveries: [
+            {
+              dataKey: "/tmp/pinchbench/9998/agent_workspace_j0001/logs/build.log",
+              archivePath,
+              requestedAt: Date.now(),
+              turnId: "turn-3",
+            },
+          ],
+        }, null, 2),
+        "utf8",
+      )));
+
+  const recoveryCtx = createTurnContext({
+    sessionId: "bench-9998-j0001",
+    segments: truncated.segments,
+    metadata: {
+      workspaceDir: "/tmp/pinchbench/9998/agent_workspace_j0001",
+      policy: {
+        version: "v2",
+        mode: "online",
+        decisions: {
+          reduction: {
+            enabled: true,
+            beforeCallPassIds: ["memory_fault_recovery"],
+            afterCallPassIds: [],
+            instructions: [],
+          },
+        },
+      },
+    },
+  });
+
+  const recovered = await module.beforeCall!(recoveryCtx, runtime);
+  const recoverySegment = recovered.segments.find((segment) => segment.source === "memory_fault_recovery");
+  assert.ok(recoverySegment, "recovery segment should be appended");
+  assert.match(recoverySegment!.text, /Archived by: exec_output_truncation/);
+  assert.match(recoverySegment!.text, /stderr line 0 with verbose shell output/);
 });
 
 test("reduction trims html payload from real transcript: blog task", async () => {

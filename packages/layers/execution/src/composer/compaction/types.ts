@@ -5,6 +5,18 @@ import type {
   SemanticPromptResolution,
 } from "../../atomic/semantic/index.js";
 
+export type TurnLocalCandidate = {
+  sourceIndex: number;
+  sourceSegmentId: string;
+  sourceToolName: string;
+  sourceDataKey: string;
+  sourceText: string;
+  writeIndex: number;
+  writeSegmentId: string;
+  writeToolName: string;
+  writeText: string;
+};
+
 export type RecentMessage = {
   index?: number;
   at?: string;

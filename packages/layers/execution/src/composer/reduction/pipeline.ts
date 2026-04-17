@@ -35,6 +35,8 @@ export function resolveReductionPasses(
     return cfg.passes.map(clonePass);
   }
 
+  const passOptions = cfg.passOptions ?? {};
+
   return [
     {
       id: "repeated_read_dedup",
@@ -42,6 +44,7 @@ export function resolveReductionPasses(
       target: "context_segment",
       options: {
         enabled: true,
+        ...(passOptions.repeated_read_dedup ?? {}),
       },
     },
     {
@@ -51,6 +54,7 @@ export function resolveReductionPasses(
       options: {
         maxChars: cfg.maxToolChars ?? 1200,
         noteLabel: cfg.strategy ?? "rule",
+        ...(passOptions.tool_payload_trim ?? {}),
       },
     },
     {
@@ -59,6 +63,7 @@ export function resolveReductionPasses(
       target: "structured_payload",
       options: {
         enabled: true,
+        ...(passOptions.html_slimming ?? {}),
       },
     },
     {
@@ -67,6 +72,7 @@ export function resolveReductionPasses(
       target: "context_segment",
       options: {
         enabled: true,
+        ...(passOptions.exec_output_truncation ?? {}),
       },
     },
     {
@@ -75,6 +81,17 @@ export function resolveReductionPasses(
       target: "context_segment",
       options: {
         enabled: true,
+        ...(passOptions.agents_startup_optimization ?? {}),
+      },
+    },
+    {
+      id: "memory_fault_recovery",
+      phase: "before_call",
+      target: "context_segment",
+      options: {
+        enabled: true,
+        maxRecoveriesPerTurn: 10,
+        ...(passOptions.memory_fault_recovery ?? {}),
       },
     },
     {
@@ -85,6 +102,7 @@ export function resolveReductionPasses(
         removeCodeFences: true,
         collapseBlankLines: true,
         trimTrailingSpaces: true,
+        ...(passOptions.format_slimming ?? {}),
       },
     },
     {
@@ -107,6 +125,7 @@ export function resolveReductionPasses(
         embeddingApiKey: cfg.semanticLlmlingua2?.embedding?.apiKey,
         embeddingApiModel: cfg.semanticLlmlingua2?.embedding?.apiModel,
         embeddingRequestTimeoutMs: cfg.semanticLlmlingua2?.embedding?.requestTimeoutMs ?? 30000,
+        ...(passOptions.semantic_llmlingua2 ?? {}),
       },
     },
     {
@@ -115,6 +134,7 @@ export function resolveReductionPasses(
       target: "result_content",
       options: {
         enabled: true,
+        ...(passOptions.format_cleaning ?? {}),
       },
     },
     {
@@ -123,6 +143,7 @@ export function resolveReductionPasses(
       target: "result_content",
       options: {
         enabled: true,
+        ...(passOptions.path_truncation ?? {}),
       },
     },
     {
@@ -131,6 +152,7 @@ export function resolveReductionPasses(
       target: "result_content",
       options: {
         enabled: true,
+        ...(passOptions.image_downsample ?? {}),
       },
     },
     {
@@ -139,6 +161,7 @@ export function resolveReductionPasses(
       target: "result_content",
       options: {
         enabled: true,
+        ...(passOptions.line_number_strip ?? {}),
       },
     },
   ];

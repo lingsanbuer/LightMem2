@@ -104,6 +104,37 @@ function summarizeReductionReport(report: ReductionReportEntry[], fallbackChars:
   };
 }
 
+function shouldTraceReduction(): boolean {
+  const raw = String(process.env.ECOCLAW_REDUCTION_TRACE ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off" && raw !== "no";
+}
+
+function emitReductionTrace(
+  phase: "before_call" | "after_call",
+  sessionId: string,
+  report: ReductionReportEntry[],
+  summary: ReductionSummary,
+): void {
+  if (!shouldTraceReduction()) return;
+
+  const changedEntries = report.filter((entry) => entry.changed || entry.note || entry.skippedReason === undefined);
+  const lines = changedEntries.length > 0 ? changedEntries : report;
+
+  console.info(
+    `[ecoclaw][reduction][${phase}] session=${sessionId} passes=${report.length} changed=${summary.changedPassCount} savedChars=${summary.savedChars} before=${summary.beforeChars} after=${summary.afterChars}`,
+  );
+
+  for (const entry of lines) {
+    const savedChars = Math.max(0, entry.beforeChars - entry.afterChars);
+    const touched = entry.touchedSegmentIds?.join(",") ?? "-";
+    const note = entry.note ? ` note=${JSON.stringify(entry.note)}` : "";
+    const skipped = entry.skippedReason ? ` skipped=${entry.skippedReason}` : "";
+    console.info(
+      `[ecoclaw][reduction][${phase}][pass] id=${entry.id} changed=${entry.changed} savedChars=${savedChars} target=${entry.target} touched=${touched}${skipped}${note}`,
+    );
+  }
+}
+
 export function createReductionModule(cfg: ReductionModuleConfig = {}): RuntimeModule {
   const allPasses = resolveReductionPasses(cfg);
 
@@ -136,6 +167,7 @@ export function createReductionModule(cfg: ReductionModuleConfig = {}): RuntimeM
           },
         },
       };
+      emitReductionTrace("before_call", String(ctx.sessionId ?? "unknown"), report, reductionSummary);
       return appendContextEvent(
         nextCtx,
         {
@@ -177,6 +209,7 @@ export function createReductionModule(cfg: ReductionModuleConfig = {}): RuntimeM
           },
         },
       };
+      emitReductionTrace("after_call", String(ctx.sessionId ?? "unknown"), report, reductionSummary);
       return appendResultEvent(
         nextResult,
         {

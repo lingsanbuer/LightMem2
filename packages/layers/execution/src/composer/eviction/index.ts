@@ -3,16 +3,8 @@ import {
   appendContextEvent,
   type RuntimeModule,
 } from "@ecoclaw/kernel";
-
-type EvictionPolicy = "noop" | "lru" | "lfu" | "gdsf" | "model_scored" | (string & {});
-type EvictionDecision = {
-  enabled: boolean;
-  policy: EvictionPolicy;
-  blocks: Array<Record<string, unknown>>;
-  instructions: Array<Record<string, unknown>>;
-  estimatedSavedChars: number;
-  notes?: string[];
-};
+import type { EvictionDecision, EvictionInstruction, EvictionPolicy } from "@ecoclaw/layer-decision";
+import { archiveContent, buildRecoveryHint } from "../../atomic/archive-recovery/index.js";
 
 export type EvictionModuleConfig = {
   enabled?: boolean;
@@ -47,6 +39,64 @@ function readPolicyEvictionDecision(metadata: Record<string, unknown> | undefine
   };
 }
 
+function normalizeToolName(metadata: Record<string, unknown> | undefined): string {
+  const toolPayload = asRecord(metadata?.toolPayload);
+  const directToolName = typeof metadata?.toolName === "string" ? metadata.toolName : undefined;
+  const payloadToolName =
+    typeof toolPayload?.toolName === "string" ? (toolPayload.toolName as string) : undefined;
+  return (directToolName ?? payloadToolName ?? "context").trim() || "context";
+}
+
+function extractDataKey(
+  metadata: Record<string, unknown> | undefined,
+  fallbackSegmentId: string,
+): string {
+  const toolPayload = asRecord(metadata?.toolPayload);
+  const candidates = [
+    metadata?.path,
+    metadata?.file_path,
+    metadata?.filePath,
+    toolPayload?.path,
+    toolPayload?.file_path,
+    toolPayload?.filePath,
+  ];
+  for (const value of candidates) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return `segment:${fallbackSegmentId}`;
+}
+
+function readInstructionSegmentIds(instruction: EvictionInstruction): string[] {
+  const parameters = asRecord(instruction.parameters);
+  const raw = parameters?.segmentIds;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim());
+}
+
+function buildEvictedStub(params: {
+  toolName: string;
+  dataKey: string;
+  archivePath: string;
+  originalSize: number;
+  rationale: string;
+}): string {
+  const truncatedRationale = params.rationale.trim().slice(0, 220);
+  return (
+    `[Evicted ${params.toolName} block for \`${params.dataKey}\`] ` +
+    (truncatedRationale ? `${truncatedRationale}. ` : "") +
+    buildRecoveryHint({
+      dataKey: params.dataKey,
+      originalSize: params.originalSize,
+      archivePath: params.archivePath,
+      sourceLabel: "Evicted block",
+    })
+  );
+}
+
 export function createEvictionModule(cfg: EvictionModuleConfig = {}): RuntimeModule {
   const enabled = cfg.enabled ?? false;
   const fallbackPolicy: EvictionPolicy = cfg.policy ?? "noop";
@@ -64,8 +114,72 @@ export function createEvictionModule(cfg: EvictionModuleConfig = {}): RuntimeMod
         notes: ["eviction_policy_decision_unavailable"],
       };
 
+      const replacements = new Map<string, { text: string; archivePath: string; dataKey: string }>();
+      if (decision.policy !== "noop") {
+        for (const instruction of decision.instructions) {
+          const segmentIds = readInstructionSegmentIds(instruction);
+          for (const segmentId of segmentIds) {
+            if (replacements.has(segmentId)) continue;
+            const segment = ctx.segments.find((entry) => entry.id === segmentId);
+            if (!segment) continue;
+            const metadata = asRecord(segment.metadata);
+            const toolName = normalizeToolName(metadata);
+            const dataKey = extractDataKey(metadata, segment.id);
+            const workspaceDir =
+              typeof ctx.metadata?.workspaceDir === "string" ? ctx.metadata.workspaceDir : undefined;
+            const { archivePath } = await archiveContent({
+              sessionId: ctx.sessionId,
+              segmentId: segment.id,
+              sourcePass: "eviction",
+              toolName,
+              dataKey,
+              originalText: segment.text,
+              workspaceDir,
+              metadata: {
+                evictionPolicy: decision.policy,
+                instructionPriority: instruction.priority,
+                rationale: instruction.rationale,
+              },
+            });
+            replacements.set(segmentId, {
+              text: buildEvictedStub({
+                toolName,
+                dataKey,
+                archivePath,
+                originalSize: segment.text.length,
+                rationale: instruction.rationale,
+              }),
+              archivePath,
+              dataKey,
+            });
+          }
+        }
+      }
+
+      const nextSegments = replacements.size === 0
+        ? ctx.segments
+        : ctx.segments.map((segment) => {
+            const replacement = replacements.get(segment.id);
+            if (!replacement) return segment;
+            return {
+              ...segment,
+              text: replacement.text,
+              metadata: {
+                ...(segment.metadata ?? {}),
+                eviction: {
+                  kind: "cached_pointer_stub",
+                  archived: true,
+                  archivePath: replacement.archivePath,
+                  dataKey: replacement.dataKey,
+                  policy: decision.policy,
+                },
+              },
+            };
+          });
+
       const nextCtx = {
         ...ctx,
+        segments: nextSegments,
         metadata: {
           ...(ctx.metadata ?? {}),
           eviction: {
@@ -73,6 +187,7 @@ export function createEvictionModule(cfg: EvictionModuleConfig = {}): RuntimeMod
             blockCount: decision.blocks.length,
             instructionCount: decision.instructions.length,
             estimatedSavedChars: decision.estimatedSavedChars,
+            appliedCount: replacements.size,
             notes: decision.notes ?? ["eviction_noop_placeholder"],
           },
         },
@@ -87,6 +202,7 @@ export function createEvictionModule(cfg: EvictionModuleConfig = {}): RuntimeMod
           blockCount: decision.blocks.length,
           instructionCount: decision.instructions.length,
           estimatedSavedChars: decision.estimatedSavedChars,
+          appliedCount: replacements.size,
           notes: decision.notes,
         },
       });

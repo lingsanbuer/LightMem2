@@ -11,7 +11,8 @@ export type BuiltinReductionPassId =
   | "path_truncation"
   | "image_downsample"
   | "line_number_strip"
-  | "agents_startup_optimization";
+  | "agents_startup_optimization"
+  | "memory_fault_recovery";
 
 export type ReductionPassId = BuiltinReductionPassId | (string & {});
 export type ReductionPhase = "before_call" | "after_call";
@@ -126,6 +127,7 @@ export type ReductionModuleConfig = {
   stateStore?: RuntimeStateStore;
   maxToolChars?: number;
   strategy?: "rule" | "llmlingua2";
+  passOptions?: Record<string, Record<string, unknown>>;
   semanticLlmlingua2?: SemanticLlmlingua2Config;
 };
 

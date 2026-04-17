@@ -11,11 +11,15 @@ const hooks = plugin.__testHooks as {
     senderMetadataBlocksAfter: number;
     developerTextForKey: string;
   };
-  applyProxyReductionToInput: (payload: any) => { changedItems: number; changedBlocks: number; savedChars: number };
+  applyProxyReductionToInput: (
+    payload: any,
+    options?: Record<string, unknown>,
+  ) => Promise<{ changedItems: number; changedBlocks: number; savedChars: number }> | { changedItems: number; changedBlocks: number; savedChars: number };
   stripInternalPayloadMarkers: (payload: any) => void;
+  normalizeConfig: (raw: unknown) => any;
 };
 
-test("applyProxyReductionToInput reduces large tool payload and preserves non-tool entries", () => {
+test("applyProxyReductionToInput reduces large tool payload and preserves non-tool entries", async () => {
   const largeJson = JSON.stringify({
     rows: Array.from({ length: 800 }, (_, i) => ({ id: i, value: `payload-${i}` })),
   });
@@ -26,16 +30,17 @@ test("applyProxyReductionToInput reduces large tool payload and preserves non-to
     ],
   };
 
-  const out = hooks.applyProxyReductionToInput(payload);
+  const out = await hooks.applyProxyReductionToInput(payload);
 
   assert.equal(out.changedItems, 1);
   assert.equal(out.changedBlocks, 1);
   assert.ok(out.savedChars > 0);
-  assert.match(String(payload.input[0].content), /\[reduction\/json\]/);
+  assert.match(String(payload.input[0].content), /\[Tool payload trimmed\]/);
+  assert.match(String(payload.input[0].content), /memory_fault\('/);
   assert.equal(payload.input[1].content, "keep me unchanged");
 });
 
-test("applyProxyReductionToInput reduces responses-style function call fields", () => {
+test("applyProxyReductionToInput reduces responses-style function call fields", async () => {
   const largeOutput = JSON.stringify({
     rows: Array.from({ length: 1200 }, (_, i) => ({ id: i, value: `tool-output-${i}` })),
   });
@@ -49,13 +54,13 @@ test("applyProxyReductionToInput reduces responses-style function call fields", 
     ],
   };
 
-  const out = hooks.applyProxyReductionToInput(payload);
+  const out = await hooks.applyProxyReductionToInput(payload);
 
-  assert.equal(out.changedItems, 2);
-  assert.equal(out.changedBlocks, 2);
+  assert.equal(out.changedItems, 1);
+  assert.equal(out.changedBlocks, 1);
   assert.ok(out.savedChars > 0);
-  assert.match(String(payload.input[0].arguments), /\[reduction\//);
-  assert.match(String(payload.input[1].output), /\[reduction\//);
+  assert.equal(payload.input[0].arguments, largeArguments);
+  assert.match(String(payload.input[1].output), /\[Tool payload trimmed\]/);
 });
 
 test("stripInternalPayloadMarkers removes internal flags before forwarding upstream", () => {
@@ -102,4 +107,81 @@ test("rewritePayloadForStablePrefix preserves content shape and injects dynamic 
   assert.match(String(payload.input[1].content[0].text), /- AGENT_ID: bench-ecoclaw-gpt-5-4-mini-0213-j0013/);
   assert.match(String(payload.input[1].content[0].text), /Please continue\./);
   assert.match(out.promptCacheKey, /^ecoclaw-pfx-/);
+});
+
+test("applyProxyReductionToInput runs policy-backed compaction before reduction", async () => {
+  const cfg = hooks.normalizeConfig({
+    modules: {
+      policy: true,
+      compaction: true,
+      reduction: false,
+    },
+    compaction: {
+      enabled: true,
+      turnLocalCompaction: {
+        enabled: true,
+      },
+    },
+  });
+
+  const { createPolicyModule } = await import("../../layers/decision/src/policy.js");
+  const { createCompactionModule } = await import("../../layers/execution/src/composer/compaction/index.js");
+
+  const payload: any = {
+    model: "ecoclaw/gpt-5.4-mini",
+    input: [
+      {
+        role: "tool",
+        toolName: "read",
+        path: "/workspace/spec.md",
+        content: "A".repeat(600),
+      },
+      {
+        role: "tool",
+        toolName: "write",
+        path: "/workspace/output.md",
+        content: "Successfully wrote 120 bytes to /workspace/output.md",
+      },
+    ],
+  };
+
+  const out = await hooks.applyProxyReductionToInput(payload, {
+    triggerMinChars: 2200,
+    maxToolChars: 1200,
+    passToggles: {
+      repeatedReadDedup: false,
+      toolPayloadTrim: false,
+      htmlSlimming: false,
+      execOutputTruncation: false,
+      agentsStartupOptimization: false,
+      memoryFaultRecovery: false,
+    },
+    beforeCallModules: {
+      policy: createPolicyModule({
+        localityEnabled: true,
+        compactionEnabled: true,
+        turnLocalCompactionEnabled: true,
+        reductionEnabled: false,
+        reductionFormatSlimmingEnabled: false,
+        reductionSemanticEnabled: false,
+        handoffEnabled: false,
+        evictionEnabled: false,
+        cacheHealthEnabled: false,
+      }),
+      compaction: createCompactionModule({
+        turnLocalCompaction: {
+          enabled: true,
+        },
+      }),
+    },
+    cfg,
+  });
+
+  assert.equal(out.changedItems, 1);
+  assert.equal(out.changedBlocks, 1);
+  assert.match(String(payload.input[0].content), /\[Archived read result/);
+  assert.equal(
+    payload.input[1].content,
+    "Successfully wrote 120 bytes to /workspace/output.md",
+  );
 });

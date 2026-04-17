@@ -1,7 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import type { ContextSegment, RuntimeStateStore, RuntimeTurnContext } from "@ecoclaw/kernel";
 import type { ReductionPassHandler } from "../../composer/reduction/types.js";
+import {
+  archiveContent,
+  buildRecoveryHint,
+} from "../archive-recovery/index.js";
 
 // ============================================================================
 // Configuration
@@ -46,9 +48,6 @@ const resolveConfig = (options?: Record<string, unknown>): RepeatedReadDedupConf
 const clipText = (value: string, maxChars: number): string =>
   value.length <= maxChars ? value : `${value.slice(0, maxChars)}...`;
 
-const sanitizePathPart = (value: string): string =>
-  value.replace(/[^a-zA-Z0-9._-]+/g, "_");
-
 const asObject = (value: unknown): Record<string, unknown> | undefined =>
   !value || typeof value !== "object" || Array.isArray(value) ? undefined : value as Record<string, unknown>;
 
@@ -82,24 +81,27 @@ const extractDataKey = (metadata: Record<string, unknown> | undefined): string |
   return undefined;
 };
 
-// ============================================================================
-// Archive Directory Resolution
-// ============================================================================
+const isReadOutputSegment = (segment: ContextSegment): boolean => {
+  const meta = asObject(segment.metadata);
+  const toolName = normalizeToolName(meta);
+  if (toolName !== "read") return false;
 
-const defaultArchiveDir = (sessionId: string, workspaceDir?: string): string => {
-  if (workspaceDir) {
-    return join(workspaceDir, ".ecoclaw-archives");
+  const fieldName =
+    typeof meta?.fieldName === "string" ? meta.fieldName.trim().toLowerCase() : undefined;
+  if (fieldName === "arguments") return false;
+  if (fieldName === "output" || fieldName === "result" || fieldName === "content") return true;
+
+  const segmentId = segment.id.trim().toLowerCase();
+  if (segmentId.endsWith("-arguments")) return false;
+  if (
+    segmentId.endsWith("-output") ||
+    segmentId.endsWith("-result") ||
+    segmentId.includes("-content")
+  ) {
+    return true;
   }
 
-  const match = sessionId.match(/-(\d+)-j(\d+)$/);
-  if (match) {
-    const runId = match[1];
-    const jobId = match[2];
-    return `/tmp/pinchbench/${runId}/agent_workspace_j${jobId}/.ecoclaw-archives`;
-  }
-
-  const homeDir = process.env.HOME || process.env.USERPROFILE || ".";
-  return join(homeDir, ".openclaw", "ecoclaw-plugin-state", "ecoclaw", "tool-result-archives", sanitizePathPart(sessionId));
+  return fieldName === undefined;
 };
 
 // ============================================================================
@@ -111,12 +113,22 @@ const buildDedupStub = (
   dataKey: string,
   originalSize: number,
   archivePath: string,
-  keptReadIndex: number,
+  headPreview: string,
+  tailPreview: string,
+  totalLines: number,
 ): string => {
+  const linesInfo = totalLines > 0 ? ` (${totalLines} lines)` : "";
   return (
-    `[Repeated ${toolName} deduplicated] First read of \`${dataKey}\` is preserved (${originalSize.toLocaleString()} chars). ` +
-    `This repeated read has been removed to save context. ` +
-    `Full archive: ${archivePath}`
+    `[Repeated ${toolName} deduplicated] First read of \`${dataKey}\` is preserved (${originalSize.toLocaleString()} chars${linesInfo}). ` +
+    `This repeated read has been removed to save context.\n` +
+    `--- File Preview ---\n${headPreview}${tailPreview ? `\n...\n${tailPreview}` : ""}` +
+    `--- End Preview ---` +
+    buildRecoveryHint({
+      dataKey,
+      originalSize,
+      archivePath,
+      sourceLabel: "Repeated read deduplicated",
+    })
   );
 };
 
@@ -138,46 +150,45 @@ const deduplicateRead = async (
   const toolName = normalizeToolName(meta) ?? "read";
   const dataKey = extractDataKey(meta) ?? "unknown";
 
-  const archiveDir = config.archiveDir ?? defaultArchiveDir(sessionId, workspaceDir);
-  const timestamp = Date.now();
-  const fileName = `${timestamp}-${sanitizePathPart(segment.id)}.json`;
-  const archivePath = join(archiveDir, fileName);
+  // Build head+tail preview from original text
+  const originalText = segment.text;
+  const lines = originalText.split("\n");
+  const totalLines = lines.length;
+  const headLines = lines.slice(0, Math.max(1, Math.floor(config.headPreviewSize / 80)));
+  const tailLines = lines.slice(-Math.max(1, Math.floor(config.tailPreviewSize / 80)));
+  const headPreview = headLines.join("\n");
+  const tailPreview = tailLines.join("\n");
 
-  await mkdir(dirname(archivePath), { recursive: true });
-  await writeFile(
-    archivePath,
-    `${JSON.stringify(
-      {
-        schemaVersion: 1,
-        kind: "repeated_read_dedup_archive",
-        sessionId,
-        segmentId: segment.id,
-        toolName,
-        dataKey,
-        originalText: segment.text,
-        originalSize: segment.text.length,
-        firstReadSegmentId: firstReadSegment.id,
-        archivedAt: new Date().toISOString(),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+  const { archivePath } = await archiveContent({
+    sessionId,
+    segmentId: segment.id,
+    sourcePass: "repeated_read_dedup",
+    toolName,
+    dataKey,
+    originalText,
+    workspaceDir,
+    archiveDir: config.archiveDir,
+    metadata: {
+      totalLines,
+      firstReadSegmentId: firstReadSegment.id,
+    },
+  });
 
   const truncatedStub = buildDedupStub(
     toolName,
     dataKey,
-    firstReadSegment.text.length,
+    originalText.length,
     archivePath,
-    0,
+    headPreview,
+    tailPreview,
+    totalLines,
   );
 
   return {
     text: truncatedStub,
     changed: true,
     archivePath,
-    originalSize: segment.text.length,
+    originalSize: originalText.length,
   };
 };
 
@@ -296,6 +307,11 @@ export const repeatedReadDedupPass: ReductionPassHandler = {
 
       const firstReadSegment = firstReadMap.get(segment.id);
       if (!firstReadSegment) {
+        nextSegments.push(segment);
+        continue;
+      }
+
+      if (!isReadOutputSegment(segment) || !isReadOutputSegment(firstReadSegment)) {
         nextSegments.push(segment);
         continue;
       }
