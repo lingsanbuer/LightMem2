@@ -131,11 +131,6 @@
             "default": true,
             "description": "Enable reduction execution module."
           },
-          "compaction": {
-            "type": "boolean",
-            "default": true,
-            "description": "Enable event-driven compaction execution module."
-          },
           "eviction": {
             "type": "boolean",
             "default": false,
@@ -145,75 +140,6 @@
             "type": "boolean",
             "default": true,
             "description": "Enable decision ledger reporting module."
-          }
-        }
-      },
-      "compaction": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Compaction and summary controls for the proxy runtime pipeline.",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": true
-          },
-          "autoForkOnPolicy": {
-            "type": "boolean",
-            "default": true,
-            "description": "Apply generated compaction plans by forking a new physical session branch."
-          },
-          "summaryGenerationMode": {
-            "type": "string",
-            "enum": ["llm_full_context", "heuristic"],
-            "default": "heuristic"
-          },
-          "summaryFallbackToHeuristic": {
-            "type": "boolean",
-            "default": true
-          },
-          "summaryMaxOutputTokens": {
-            "type": "number",
-            "description": "Max output tokens for summary sidecar generation."
-          },
-          "includeAssistantReply": {
-            "type": "boolean",
-            "default": true
-          },
-          "summaryPrompt": {
-            "type": "string",
-            "description": "Inline summary prompt override used by the summary module."
-          },
-          "summaryPromptPath": {
-            "type": "string",
-            "description": "Path to a custom summary prompt file."
-          },
-          "resumePrefixPrompt": {
-            "type": "string",
-            "description": "Inline resume-prefix prompt override used when seeding compacted branches."
-          },
-          "resumePrefixPromptPath": {
-            "type": "string",
-            "description": "Path to a custom resume-prefix prompt file."
-          },
-          "compactionCooldownTurns": {
-            "type": "number",
-            "description": "Cooldown turns after a compaction request before another request is allowed."
-          },
-          "turnLocalCompaction": {
-            "type": "object",
-            "additionalProperties": false,
-            "description": "Turn-local compaction settings for archiving tool results that have been consumed by subsequent writes.",
-            "properties": {
-              "enabled": {
-                "type": "boolean",
-                "default": false,
-                "description": "Enable turn-local compaction."
-              },
-              "archiveDir": {
-                "type": "string",
-                "description": "Directory to store archived tool results."
-              }
-            }
           }
         }
       },
@@ -228,7 +154,10 @@
           },
           "handoffGenerationMode": {
             "type": "string",
-            "enum": ["llm_full_context", "heuristic"],
+            "enum": [
+              "llm_full_context",
+              "heuristic"
+            ],
             "default": "heuristic"
           },
           "handoffFallbackToHeuristic": {
@@ -268,7 +197,13 @@
           },
           "policy": {
             "type": "string",
-            "enum": ["noop", "lru", "lfu", "gdsf", "model_scored"],
+            "enum": [
+              "noop",
+              "lru",
+              "lfu",
+              "gdsf",
+              "model_scored"
+            ],
             "default": "noop"
           },
           "maxCandidateBlocks": {
@@ -281,7 +216,10 @@
           },
           "replacementMode": {
             "type": "string",
-            "enum": ["pointer_stub", "drop"],
+            "enum": [
+              "pointer_stub",
+              "drop"
+            ],
             "default": "pointer_stub",
             "description": "How canonical task eviction replaces archived content: keep a pointer stub or drop the task bundle entirely."
           }
@@ -326,13 +264,18 @@
           },
           "lifecycleMode": {
             "type": "string",
-            "enum": ["coupled", "decoupled"],
+            "enum": [
+              "coupled",
+              "decoupled"
+            ],
             "default": "coupled",
             "description": "Whether the estimator directly predicts evictable or only predicts active/completed."
           },
           "evictionPromotionPolicy": {
             "type": "string",
-            "enum": ["fifo"],
+            "enum": [
+              "fifo"
+            ],
             "default": "fifo",
             "description": "Promotion policy used in decoupled mode for completed -> evictable."
           },
@@ -343,7 +286,10 @@
           },
           "inputMode": {
             "type": "string",
-            "enum": ["sliding_window", "completed_summary_plus_active_turns"],
+            "enum": [
+              "sliding_window",
+              "completed_summary_plus_active_turns"
+            ],
             "default": "sliding_window",
             "description": "Estimator input construction mode. sliding_window feeds only the pending turn window; completed_summary_plus_active_turns feeds summaries of completed tasks plus all turns for unresolved tasks."
           }
@@ -396,7 +342,11 @@
             "properties": {
               "provider": {
                 "type": "string",
-                "enum": ["local", "api", "none"],
+                "enum": [
+                  "local",
+                  "api",
+                  "none"
+                ],
                 "default": "none"
               },
               "modelPath": {
@@ -431,9 +381,11 @@
         "properties": {
           "engine": {
             "type": "string",
-            "enum": ["layered"],
+            "enum": [
+              "layered"
+            ],
             "default": "layered",
-            "description": "Reduction delegates pass execution to layers/execution pipeline."
+            "description": "Reduction delegates pass execution to plugin-local execution pipeline."
           },
           "triggerMinChars": {
             "type": "number",
@@ -483,34 +435,69 @@
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true },
-                  "headPreviewSize": { "type": "number" },
-                  "tailPreviewSize": { "type": "number" },
-                  "noteLabel": { "type": "string" },
-                  "archiveDir": { "type": "string" },
-                  "keepFirstRead": { "type": "boolean", "default": true }
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "headPreviewSize": {
+                    "type": "number"
+                  },
+                  "tailPreviewSize": {
+                    "type": "number"
+                  },
+                  "noteLabel": {
+                    "type": "string"
+                  },
+                  "archiveDir": {
+                    "type": "string"
+                  },
+                  "keepFirstRead": {
+                    "type": "boolean",
+                    "default": true
+                  }
                 }
               },
               "toolPayloadTrim": {
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "maxChars": { "type": "number" },
-                  "noteLabel": { "type": "string" },
-                  "stdout": { "type": "object", "additionalProperties": true },
-                  "stderr": { "type": "object", "additionalProperties": true },
-                  "json": { "type": "object", "additionalProperties": true },
-                  "blob": { "type": "object", "additionalProperties": true }
+                  "maxChars": {
+                    "type": "number"
+                  },
+                  "noteLabel": {
+                    "type": "string"
+                  },
+                  "stdout": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "stderr": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "json": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "blob": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
                 }
               },
               "htmlSlimming": {
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
                   "attributeWhitelist": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 }
               },
@@ -518,14 +505,27 @@
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true },
-                  "headPreviewSize": { "type": "number" },
-                  "tailPreviewSize": { "type": "number" },
-                  "noteLabel": { "type": "string" },
-                  "archiveDir": { "type": "string" },
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "headPreviewSize": {
+                    "type": "number"
+                  },
+                  "tailPreviewSize": {
+                    "type": "number"
+                  },
+                  "noteLabel": {
+                    "type": "string"
+                  },
+                  "archiveDir": {
+                    "type": "string"
+                  },
                   "toolThresholds": {
                     "type": "object",
-                    "additionalProperties": { "type": "number" }
+                    "additionalProperties": {
+                      "type": "number"
+                    }
                   }
                 }
               },
@@ -533,26 +533,47 @@
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true }
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
                 }
               },
               "memoryFaultRecovery": {
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true },
-                  "noteLabel": { "type": "string" },
-                  "stateDir": { "type": "string" },
-                  "maxRecoveriesPerTurn": { "type": "number" }
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "noteLabel": {
+                    "type": "string"
+                  },
+                  "stateDir": {
+                    "type": "string"
+                  },
+                  "maxRecoveriesPerTurn": {
+                    "type": "number"
+                  }
                 }
               },
               "formatSlimming": {
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "removeCodeFences": { "type": "boolean", "default": true },
-                  "collapseBlankLines": { "type": "boolean", "default": true },
-                  "trimTrailingSpaces": { "type": "boolean", "default": true }
+                  "removeCodeFences": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "collapseBlankLines": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "trimTrailingSpaces": {
+                    "type": "boolean",
+                    "default": true
+                  }
                 }
               },
               "semanticLlmlingua2": {
@@ -563,34 +584,71 @@
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true }
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
                 }
               },
               "pathTruncation": {
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true },
-                  "maxPathLength": { "type": "number" }
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "maxPathLength": {
+                    "type": "number"
+                  }
                 }
               },
               "imageDownsample": {
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true },
-                  "maxImageSizeKB": { "type": "number" },
-                  "maxSvgSizeKB": { "type": "number" }
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "maxImageSizeKB": {
+                    "type": "number"
+                  },
+                  "maxSvgSizeKB": {
+                    "type": "number"
+                  }
                 }
               },
               "lineNumberStrip": {
                 "type": "object",
                 "additionalProperties": true,
                 "properties": {
-                  "enabled": { "type": "boolean", "default": true }
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  }
                 }
               }
             }
+          }
+        }
+      },
+      "summary": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Summary generation controls consumed by the policy layer.",
+        "properties": {
+          "summaryGenerationMode": {
+            "type": "string",
+            "enum": [
+              "llm_full_context",
+              "heuristic"
+            ],
+            "default": "heuristic"
+          },
+          "summaryMaxOutputTokens": {
+            "type": "number",
+            "description": "Max output tokens for summary sidecar generation."
           }
         }
       }
@@ -635,8 +693,8 @@
     "contextEngine": {
       "label": "Context Engine"
     },
-    "compaction": {
-      "label": "Compaction"
+    "summary": {
+      "label": "Summary"
     },
     "taskStateEstimator": {
       "label": "Task State Estimator"

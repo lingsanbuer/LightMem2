@@ -9,7 +9,7 @@ It includes:
 
 - Embedded responses proxy
 - Stable-prefix cache reuse for OpenAI Responses-compatible providers
-- Cache/summary/compaction decision modules
+- Cache/summary decision modules
 - Session topology + `/ecoclaw` command controls
 - JSONL event tracing for analysis
 
@@ -87,21 +87,11 @@ openclaw config set plugins.entries.ecoclaw.config.semanticReduction.embedding.m
 openclaw gateway restart
 ```
 
-Optional compaction + summary controls:
+Summary generation knobs:
 
 ```bash
-openclaw config set plugins.entries.ecoclaw.config.compaction.enabled true
-openclaw config set plugins.entries.ecoclaw.config.compaction.autoForkOnPolicy true
-openclaw config set plugins.entries.ecoclaw.config.compaction.summaryGenerationMode "heuristic"
-openclaw config set plugins.entries.ecoclaw.config.compaction.compactionCooldownTurns 6
-openclaw gateway restart
-```
-
-If you want custom prompts for summary / resume:
-
-```bash
-openclaw config set plugins.entries.ecoclaw.config.compaction.summaryPromptPath "/abs/path/to/default-summary.md"
-openclaw config set plugins.entries.ecoclaw.config.compaction.resumePrefixPromptPath "/abs/path/to/default-resume-prefix.md"
+openclaw config set plugins.entries.ecoclaw.config.summary.summaryGenerationMode "heuristic"
+openclaw config set plugins.entries.ecoclaw.config.summary.summaryMaxOutputTokens 1200
 openclaw gateway restart
 ```
 
@@ -126,18 +116,8 @@ Valid config keys are only:
 - `debugTapPath`
 - `proxyAutostart`
 - `proxyPort`
-- `compaction`
 - `semanticReduction`
-
-Recommended `compaction` defaults:
-
-- `enabled=true`
-- `autoForkOnPolicy=true`
-- `summaryGenerationMode="heuristic"`
-- `summaryFallbackToHeuristic=true`
-- `summaryMaxOutputTokens=1200`
-- `includeAssistantReply=true`
-- `compactionCooldownTurns=6`
+- `summary`
 
 ## 4) Model Selection
 
@@ -201,12 +181,11 @@ it decided is to inspect `event-trace.jsonl`.
 Key places to look:
 
 - `finalContext.metadata.policy`: full online policy snapshot for that turn
-- `finalContext.metadata.policy.roi`: explicit ROI estimates for summary, compaction, and reduction
+- `finalContext.metadata.policy.roi`: explicit ROI estimates for summary, handoff, and reduction
 - `finalContext.metadata.policy.decisions`: which execution paths were requested
 - `finalContext.metadata.reduction.beforeCallSummary`: pre-call reduction summary
 - `finalContext.metadata.reduction.afterCallSummary`: post-call reduction summary
 - `finalContext.metadata.summary`: latest summary generation artifact
-- `finalContext.metadata.compaction`: latest compaction plan/apply artifact
 
 Important ROI fields:
 
@@ -246,7 +225,6 @@ bash ./scripts/e2e.sh cache-multi
 bash ./scripts/e2e.sh cache-fork
 bash ./scripts/e2e.sh semantic
 bash ./scripts/e2e.sh summary
-bash ./scripts/e2e.sh compaction
 bash ./scripts/e2e.sh report
 ```
 
@@ -325,32 +303,6 @@ The semantic harness:
 - reads the new EcoClaw trace entry and verifies `policy -> reduction -> semantic_llmlingua2`
 - restores the original OpenClaw config unless `KEEP_CONFIG=1`
 
-Run the compaction end-to-end harness:
-
-```bash
-cd packages/openclaw-plugin
-npm run acceptance:compaction
-```
-
-Useful overrides:
-
-```bash
-COMPACTION_TRIGGER_TURN_COUNT=1 \
-SUMMARY_GENERATION_MODE=heuristic \
-bash ./scripts/compaction_e2e.sh
-```
-
-The compaction harness:
-
-- rebuilds the plugin dist bundle
-- writes a temporary `compaction` plugin config
-- restarts OpenClaw gateway
-- sends three real turns through the same OpenClaw session
-- verifies turn 2 emits `policy.compaction.requested -> compaction.plan.generated -> compaction.apply.executed`
-- verifies `summary.generated` only when summary policy was independently requested for that same turn
-- verifies turn 3 is routed onto the newly forked physical session branch
-- restores the original OpenClaw config unless `KEEP_CONFIG=1`
-
 Run the summary end-to-end harness:
 
 ```bash
@@ -369,11 +321,10 @@ bash ./scripts/summary_e2e.sh
 The summary harness:
 
 - rebuilds the plugin dist bundle
-- writes a temporary `compaction` plugin config with compaction apply disabled
+- writes a temporary `summary` plugin config
 - restarts OpenClaw gateway
 - sends one real agent turn through the plugin path
 - verifies `policy.summary.requested -> summary.generated -> context.state.updated`
-- verifies this run does not emit compaction plan/apply events
 - restores the original OpenClaw config unless `KEEP_CONFIG=1`
 
 ## 10) Dashboard
@@ -383,4 +334,4 @@ cd apps/lab-bench
 corepack pnpm --filter @ecoclaw/lab-bench dev
 ```
 
-Open `http://127.0.0.1:7777` to inspect runtime decisions and compaction ROI.
+Open `http://127.0.0.1:7777` to inspect runtime decisions and summary/reduction ROI.

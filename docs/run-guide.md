@@ -140,7 +140,7 @@ If proxy port is in use, change `proxyPort` in openclaw.json to a free port, res
 - `plugins.entries.ecoclaw.config.proxyBaseUrl`
 - `plugins.entries.ecoclaw.config.proxyApiKey`
 - `plugins.entries.ecoclaw.config.proxyPort`
-- `plugins.entries.ecoclaw.config.modules.compaction=false`
+- `plugins.entries.ecoclaw.config.summary.*`
 
 ### Browser issues
 Chrome binary path: `/mnt/20t/xubuqiang/chrome/chrome-linux64/chrome`

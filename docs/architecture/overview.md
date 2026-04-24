@@ -34,8 +34,12 @@ Two different mechanisms:
 ## Current Module Structure
 
 - `packages/layers/decision/` - Policy decisions
-- `packages/layers/execution/` - Execution layer (reduction, compaction, eviction)
+- `packages/openclaw-plugin/src/execution/` - Plugin-local execution helpers (reduction, passes, archive-recovery)
+- `packages/layers/history/` - Registry and raw semantic turn persistence
 - `packages/openclaw-plugin/` - Plugin implementation
+
+Current refactor status:
+- [plugin-refactor-status.md](./plugin-refactor-status.md)
 
 ## PICHAY Reference (from old design)
 

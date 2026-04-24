@@ -37,14 +37,19 @@ Two different mechanisms:
 ## Current Module Structure
 
 - `packages/layers/decision/` - Policy decisions
-- `packages/layers/execution/` - Execution layer (reduction, compaction, eviction)
 - `packages/openclaw-plugin/` - Plugin implementation
+
+Current reality on 2026-04-24:
+
+- plugin-local execution now lives under `packages/openclaw-plugin/src/execution/`
+- `packages/layers/execution/` has been removed
+- `compaction` is not part of the live runtime anymore
 
 ## Phase Priority
 
-1. **Eviction** (current focus) - task-level eviction replacing whole task blocks with stubs
-2. **Compaction** (deferred) - local content compression within tasks
-3. **Reduction** (stable, minimal changes) - request-level content trimming
+1. **Eviction** - task-level durable history removal
+2. **Reduction** - request-level content trimming and tool-result slimming
+3. **Compaction** - currently removed from runtime; reserved for future redesign if needed
 
 ## Before Call / After Call Responsibilities
 
@@ -58,4 +63,4 @@ Two different mechanisms:
 - Appends to canonical transcript
 - Updates raw semantic turns
 - Updates task registry
-- Does durable rewrite (eviction/compaction/reduction)
+- Does durable rewrite (eviction) plus request-level reduction side effects that were already materialized upstream

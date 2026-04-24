@@ -389,3 +389,33 @@
 - 验证：单独回归 `task_22_second_brain`（run `10164`）后，final grade 恢复为 `0.9/1.0 (95%)`，judge 正常识别到写入 `memory/MEMORY.md`、同 session recall 和跨 session recall。
 - 结论：这个问题是 bench transcript slicing bug，不是 memory tool / retrieval 能力缺失。
 
+## Exec allowlist can silently break file-discovery tasks
+
+Observed in full run `10165` (`pinchbench_ecoclaw_20260423_200947_generate.log`).
+
+Symptoms:
+- `task_15_daily_summary` and `task_17_email_search` failed before real work started.
+- Agent tried shell-based directory discovery (`find ... | sort`) and got `exec denied: allowlist miss`.
+- Fallback `read` on the directory then failed with `EISDIR`.
+- The agent stopped and asked for filenames, so no deliverable file was produced.
+
+Impact:
+- This is not an eviction/decoupling failure. It is a host exec approvals / allowlist failure.
+- Baseline `10154` did not hit this path, so score regressions here can be misleading if treated as context-management regressions.
+
+Mitigation applied:
+- Added common directory-discovery binaries to host-local exec approvals allowlist (`~/.openclaw/exec-approvals.json`):
+  - `/usr/bin/find`
+  - `/usr/bin/ls`
+  - `/usr/bin/sort`
+  - `/usr/bin/grep`
+  - `/usr/bin/head`
+  - `/usr/bin/tail`
+  - `/usr/bin/wc`
+  - `/usr/bin/cut`
+  - `/usr/bin/tr`
+  - `/usr/bin/uniq`
+- Backups created alongside the approvals files with suffix `.bak_allowlist`.
+
+Caveat:
+- `task_19_spreadsheet_summary` appears to need interpreter-style exec for Excel parsing. Directory-discovery allowlist fixes do not solve that by themselves. Do not casually allowlist `python`/`bash`; prefer a dedicated reader/tool if possible.

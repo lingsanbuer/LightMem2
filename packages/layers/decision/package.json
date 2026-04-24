@@ -11,7 +11,6 @@
     "test": "tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
-    "@ecoclaw/layer-context": "workspace:*",
     "@ecoclaw/layer-history": "workspace:*",
     "@ecoclaw/kernel": "workspace:*"
   }

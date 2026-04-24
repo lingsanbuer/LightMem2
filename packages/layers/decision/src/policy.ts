@@ -27,10 +27,6 @@ import {
   analyzeLineNumberStrip,
 } from "./reduction/index.js";
 import {
-  analyzeCompactionFromHistory,
-  type CompactionDecision,
-} from "./compaction/index.js";
-import {
   analyzeEvictionFromTaskRegistry,
   type EvictionBlock,
   type EvictionInstruction,
@@ -62,10 +58,6 @@ export type PolicyModuleConfig = {
   localityStructuralPayloadMinChars?: number;
   localityErrorMinChars?: number;
   localitySubtaskBoundaryMinMessages?: number;
-  // Turn-local compaction config
-  turnLocalCompactionEnabled?: boolean;
-  turnLocalCompactionDelayTurns?: number;
-  turnLocalCompactionMinChars?: number;
   summaryGenerationMode?: "llm_full_context" | "heuristic";
   summaryMaxOutputTokens?: number;
   handoffEnabled?: boolean;
@@ -78,8 +70,6 @@ export type PolicyModuleConfig = {
   reductionFormatSlimmingMinChars?: number;
   reductionSemanticEnabled?: boolean;
   reductionSemanticMinChars?: number;
-  compactionEnabled?: boolean;
-  compactionCooldownTurns?: number;
   evictionEnabled?: boolean;
   evictionPolicy?: EvictionPolicy;
   evictionMinBlockChars?: number;
@@ -120,10 +110,6 @@ export type PolicyOnlineConfigSnapshot = {
     semanticEnabled: boolean;
     semanticMinChars: number;
   };
-  compaction: {
-    enabled: boolean;
-    cooldownTurns: number;
-  };
   eviction: {
     enabled: boolean;
     policy: EvictionPolicy;
@@ -156,7 +142,6 @@ export type PolicyOnlineStateSnapshot = {
   recentCacheMissRate: number;
   summaryCooldownActive: boolean;
   handoffCooldownActive: boolean;
-  compactionCooldownActive: boolean;
   recentMissCount: number;
   cacheHealth: {
     mode: PolicyCacheHealthMode;
@@ -174,7 +159,6 @@ export type PolicyOnlineSignals = {
   summaryReasons: string[];
   handoffReasons: string[];
   reductionReasons: string[];
-  compactionReasons: string[];
   evictionReasons: string[];
   locality: {
     source: PolicyLocalityAnalysis["source"];
@@ -193,8 +177,6 @@ export type PolicyOnlineSignals = {
     handoffCandidateMessageIds: string[];
     handoffCandidateChars: number;
     errorCandidateMessageIds: string[];
-    compactionCandidateBranchIds: string[];
-    compactionCandidateReplayChars: number;
   };
   cacheHealth: {
     supported: boolean;
@@ -215,7 +197,7 @@ export type PolicyRoiEstimate = {
   notes: string[];
 };
 
-export type PolicySemanticTarget = "summary" | "handoff" | "compaction";
+export type PolicySemanticTarget = "summary" | "handoff";
 export type PolicySemanticPurpose = "range_summary" | "checkpoint_seed" | "task_handoff";
 export type PolicySemanticGenerationMode = "llm_full_context" | "heuristic";
 export type PolicySemanticArbitration =
@@ -233,7 +215,6 @@ export type PolicyReductionRoiSnapshot = {
 export type PolicyOnlineRoiSnapshot = {
   summary: PolicyRoiEstimate;
   handoff: PolicyRoiEstimate;
-  compaction: PolicyRoiEstimate;
   reduction: PolicyReductionRoiSnapshot;
 };
 
@@ -257,16 +238,6 @@ export type PolicyHandoffDecision = {
   arbitration: PolicySemanticArbitration;
 };
 
-export type PolicyCompactionDecision = {
-  supported: boolean;
-  enabled: boolean;
-  purpose: "checkpoint_seed";
-  requested: boolean;
-  reasons: string[];
-  cooldownActive: boolean;
-  generationMode: PolicySemanticGenerationMode;
-  arbitration: PolicySemanticArbitration;
-};
 
 export type PolicyEvictionDecision = {
   enabled: boolean;
@@ -331,13 +302,10 @@ export type PolicyLocalityDecision = {
   reductionCandidateMessageIds: string[];
   handoffCandidateMessageIds: string[];
   errorCandidateMessageIds: string[];
-  compactionCandidateBranchIds: string[];
-  turnLocalCandidateMessageIds: string[];
-  turnLocalDelayTurns: number;
   signals: PolicyLocalitySignal[];
 };
 
-import type { ReductionInstruction, CompactionInstruction } from "./types.js";
+import type { ReductionInstruction } from "./types.js";
 
 export type PolicyOnlineDecisions = {
   summary: PolicySummaryDecision;
@@ -348,17 +316,6 @@ export type PolicyOnlineDecisions = {
     afterCallPassIds: string[];
     instructions: ReductionInstruction[];
     reasons: string[];
-  };
-  compaction: {
-    supported: boolean;
-    enabled: boolean;
-    purpose: "checkpoint_seed";
-    requested: boolean;
-    reasons: string[];
-    cooldownActive: boolean;
-    generationMode: PolicySemanticGenerationMode;
-    arbitration: PolicySemanticArbitration;
-    instructions: CompactionInstruction[];
   };
   eviction: PolicyEvictionDecision;
   taskState?: PolicyTaskStateDecision;
@@ -382,7 +339,6 @@ type PolicySessionState = {
   completedTurns: number;
   lastSummaryRequestTurn?: number;
   lastHandoffRequestTurn?: number;
-  lastCompactionRequestTurn?: number;
   recentCacheReadHit: number[];
   cumulativeInputTokens: number;
   cacheHealth: {
@@ -408,8 +364,6 @@ type NormalizedPolicyConfig = {
   reductionFormatSlimmingMinChars: number;
   reductionSemanticEnabled: boolean;
   reductionSemanticMinChars: number;
-  compactionEnabled: boolean;
-  compactionCooldownTurns: number;
   evictionEnabled: boolean;
   evictionPolicy: EvictionPolicy;
   evictionMinBlockChars: number;
@@ -423,9 +377,6 @@ type NormalizedPolicyConfig = {
   cacheHealthHitMinTokens: number;
   cacheHealthMissesToCold: number;
   cacheHealthWarmSeconds: number;
-  turnLocalCompactionEnabled: boolean;
-  turnLocalCompactionDelayTurns: number;
-  turnLocalCompactionMinChars: number;
   stateDir?: string;
   taskStateEstimator: Required<TaskStateEstimatorApiConfig>;
 };
@@ -724,24 +675,18 @@ type PolicyAnalysis = {
   reductionBeforeCallPassIds: string[];
   reductionAfterCallPassIds: string[];
   reductionInstructions: ReductionInstruction[];
-  compactionReasons: string[];
-  compactionInstructions: CompactionInstruction[];
   evictionReasons: string[];
   evictionDecision: PolicyEvictionDecision;
   locality: PolicyLocalityAnalysis;
   roi: PolicyOnlineRoiSnapshot;
   summaryCooldownActive: boolean;
   handoffCooldownActive: boolean;
-  compactionCooldownActive: boolean;
   requestSummary: boolean;
   requestHandoff: boolean;
-  requestCompaction: boolean;
   summaryGenerationMode: PolicySemanticGenerationMode;
   handoffGenerationMode: PolicySemanticGenerationMode;
-  compactionGenerationMode: PolicySemanticGenerationMode;
   summaryArbitration: PolicySemanticArbitration;
   handoffArbitration: PolicySemanticArbitration;
-  compactionArbitration: PolicySemanticArbitration;
   semanticBudget: PolicySemanticBudgetDecision;
   cacheHealth: {
     supported: boolean;
@@ -759,11 +704,8 @@ const POLICY_DEFAULT_FORMAT_SLIMMING_RATIO = 0.02;
 const POLICY_DEFAULT_FORMAT_SLIMMING_MIN_SAVED_TOKENS = 8;
 const POLICY_DEFAULT_SUMMARY_MIN_NET_TOKENS = 24;
 const POLICY_DEFAULT_HANDOFF_MIN_NET_TOKENS = 24;
-const POLICY_DEFAULT_COMPACTION_MIN_NET_TOKENS = 48;
 const POLICY_DEFAULT_HANDOFF_FUTURE_REUSE_MIN = 2;
 const POLICY_DEFAULT_HANDOFF_FUTURE_REUSE_MAX = 5;
-const POLICY_DEFAULT_COMPACTION_FUTURE_TURNS_MIN = 2;
-const POLICY_DEFAULT_COMPACTION_FUTURE_TURNS_MAX = 5;
 
 const toNum = (value: unknown): number | undefined => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -921,8 +863,6 @@ function normalizeConfig(cfg: PolicyModuleConfig): NormalizedPolicyConfig {
     reductionFormatSlimmingMinChars: Math.max(1, cfg.reductionFormatSlimmingMinChars ?? 1200),
     reductionSemanticEnabled: cfg.reductionSemanticEnabled ?? false,
     reductionSemanticMinChars: Math.max(1, cfg.reductionSemanticMinChars ?? 4000),
-    compactionEnabled: cfg.compactionEnabled ?? true,
-    compactionCooldownTurns: Math.max(0, cfg.compactionCooldownTurns ?? 6),
     evictionEnabled: cfg.evictionEnabled ?? false,
     evictionPolicy: cfg.evictionPolicy ?? "noop",
     evictionMinBlockChars: Math.max(16, cfg.evictionMinBlockChars ?? 256),
@@ -936,9 +876,6 @@ function normalizeConfig(cfg: PolicyModuleConfig): NormalizedPolicyConfig {
     cacheHealthHitMinTokens: Math.max(0, cfg.cacheHealthHitMinTokens ?? 64),
     cacheHealthMissesToCold: Math.max(1, cfg.cacheHealthMissesToCold ?? 2),
     cacheHealthWarmSeconds: Math.max(30, cfg.cacheHealthWarmSeconds ?? 7200),
-    turnLocalCompactionEnabled: cfg.turnLocalCompactionEnabled ?? true,
-    turnLocalCompactionDelayTurns: cfg.turnLocalCompactionDelayTurns ?? 0,
-    turnLocalCompactionMinChars: cfg.turnLocalCompactionMinChars ?? 500,
     stateDir: typeof cfg.stateDir === "string" && cfg.stateDir.trim().length > 0 ? cfg.stateDir : undefined,
     taskStateEstimator: {
       enabled: cfg.taskStateEstimator?.enabled ?? false,
@@ -961,7 +898,7 @@ function normalizeConfig(cfg: PolicyModuleConfig): NormalizedPolicyConfig {
 
 function collectSignalReasons(
   locality: PolicyLocalityAnalysis,
-  action: "summary" | "handoff" | "reduction" | "compaction",
+  action: "summary" | "handoff" | "reduction",
 ): string[] {
   const reasons: string[] = [];
   for (const signal of locality.signals) {
@@ -1042,25 +979,14 @@ function analyzePolicyBeforeBuild(
   const imageDownsampleDecision = analyzeImageDownsample(ctx.segments);
   const lineNumberStripDecision = analyzeLineNumberStrip(ctx.segments);
 
-  // Analyze segments for compaction opportunities
   const historyView = buildHistoryView(ctx);
-  const compactionDecision = analyzeCompactionFromHistory(historyView.blocks);
-  const stableTokens = estimateTokensFromChars(stableChars);
   const promptTokensEstimate = estimateTokensFromChars(promptChars);
   const reductionTargetTokens = estimateTokensFromChars(locality.reductionCandidateChars);
   const summaryTargetTokens = estimateTokensFromChars(locality.summaryCandidateChars);
   const handoffTargetTokens = estimateTokensFromChars(
     Math.max(locality.handoffCandidateChars, locality.summaryCandidateChars),
   );
-  const compactionTargetTokens = estimateTokensFromChars(
-    Math.max(locality.compactionCandidateReplayChars, locality.summaryCandidateChars, stableChars),
-  );
   const reductionToolPayloadTokens = estimateTokensFromChars(reductionStats.chars);
-  const expectedCompactionFutureTurns = clamp(
-    Math.ceil((state.completedTurns + 1) / 3),
-    POLICY_DEFAULT_COMPACTION_FUTURE_TURNS_MIN,
-    POLICY_DEFAULT_COMPACTION_FUTURE_TURNS_MAX,
-  );
   const expectedHandoffReuseTurns = clamp(
     Math.ceil((state.completedTurns + 1) / 2),
     POLICY_DEFAULT_HANDOFF_FUTURE_REUSE_MIN,
@@ -1091,11 +1017,6 @@ function analyzePolicyBeforeBuild(
   const handoffEstimatedBenefitTokens = Math.round(
     (handoffTargetTokens + Math.round(promptTokensEstimate * 0.4)) * expectedHandoffReuseTurns,
   );
-  const compactionEstimatedCostTokens =
-    config.summaryGenerationMode === "heuristic"
-      ? 0
-      : Math.min(config.summaryMaxOutputTokens, Math.max(64, Math.round(compactionTargetTokens * 0.28)));
-  const compactionEstimatedBenefitTokens = compactionTargetTokens * expectedCompactionFutureTurns;
 
   const reductionPassRoi: Record<string, PolicyRoiEstimate> = {
     tool_payload_trim: buildRoiEstimate({
@@ -1169,23 +1090,10 @@ function analyzePolicyBeforeBuild(
       `generation_mode=${config.handoffGenerationMode}`,
     ],
   });
-  const compactionRoi = buildRoiEstimate({
-    savedTokens: compactionEstimatedBenefitTokens,
-    costTokens: compactionEstimatedCostTokens,
-    minNetTokens:
-      config.summaryGenerationMode === "heuristic" ? 0 : POLICY_DEFAULT_COMPACTION_MIN_NET_TOKENS,
-    confidence: config.summaryGenerationMode === "heuristic" ? "medium" : "high",
-    notes: [
-      `compaction_candidate_tokens=${compactionTargetTokens}`,
-      `expected_future_turns=${expectedCompactionFutureTurns}`,
-      `generation_mode=${config.summaryGenerationMode}`,
-    ],
-  });
 
   const roi: PolicyOnlineRoiSnapshot = {
     summary: summaryRoi,
     handoff: handoffRoi,
-    compaction: compactionRoi,
     reduction: {
       beforeCall: reductionBeforeCallRoi,
       afterCall: reductionAfterCallRoi,
@@ -1195,9 +1103,6 @@ function analyzePolicyBeforeBuild(
 
   const summaryReasons = collectSignalReasons(locality, "summary");
   const handoffReasons = config.handoffEnabled ? collectSignalReasons(locality, "handoff") : [];
-  const compactionSupported = apiFamily === "openai-responses";
-  const compactionReasons =
-    compactionSupported && config.compactionEnabled ? collectSignalReasons(locality, "compaction") : [];
   const evictionReasons: string[] = config.evictionEnabled
     ? [`eviction_policy=${config.evictionPolicy}`]
     : [];
@@ -1207,8 +1112,6 @@ function analyzePolicyBeforeBuild(
   const reductionAfterCallPassIds: string[] = [];
   const localityReductionReasons = collectSignalReasons(locality, "reduction");
   reductionReasons.push(...localityReductionReasons);
-  // Always enable agents_startup_optimization pass when reduction is enabled
-  // This pass modifies AGENTS.md instructions to prevent unnecessary memory file reads
   if (config.reductionEnabled) {
     reductionBeforeCallPassIds.push("agents_startup_optimization");
     reductionReasons.push("agents_startup_optimization_always_enabled");
@@ -1233,7 +1136,6 @@ function analyzePolicyBeforeBuild(
     reductionReasons.push("semantic_candidate");
     reductionAfterCallPassIds.push("semantic_llmlingua2");
   }
-  // Add repeated read deduplication pass if repeated reads detected
   if (
     config.reductionEnabled &&
     repeatedReadDecision.instructions.length > 0 &&
@@ -1242,8 +1144,6 @@ function analyzePolicyBeforeBuild(
     reductionReasons.push(`repeated_reads_detected(count=${repeatedReadDecision.instructions.length},saved=${repeatedReadDecision.estimatedSavedChars})`);
     reductionBeforeCallPassIds.push("repeated_read_dedup");
   }
-
-  // Add tool payload trim pass if tool payloads detected
   if (
     config.reductionEnabled &&
     toolPayloadDecision.instructions.length > 0 &&
@@ -1252,8 +1152,6 @@ function analyzePolicyBeforeBuild(
     reductionReasons.push(`tool_payload_detected(count=${toolPayloadDecision.instructions.length},saved=${toolPayloadDecision.estimatedSavedChars})`);
     reductionBeforeCallPassIds.push("tool_payload_trim");
   }
-
-  // Add format slimming pass if format overhead detected
   if (
     config.reductionFormatSlimmingEnabled &&
     formatSlimmingDecision.instructions.length > 0 &&
@@ -1262,8 +1160,6 @@ function analyzePolicyBeforeBuild(
     reductionReasons.push(`format_overhead_detected(count=${formatSlimmingDecision.instructions.length},saved=${formatSlimmingDecision.estimatedSavedChars})`);
     reductionAfterCallPassIds.push("format_slimming");
   }
-
-  // Add exec output truncation pass if large exec outputs detected
   if (
     config.reductionEnabled &&
     execOutputDecision.instructions.length > 0 &&
@@ -1272,8 +1168,6 @@ function analyzePolicyBeforeBuild(
     reductionReasons.push(`large_exec_output(count=${execOutputDecision.instructions.length},saved=${execOutputDecision.estimatedSavedChars})`);
     reductionBeforeCallPassIds.push("exec_output_truncation");
   }
-
-  // Add format cleaning pass if format issues detected
   if (
     config.reductionEnabled &&
     formatCleaningDecision.instructions.length > 0 &&
@@ -1282,8 +1176,6 @@ function analyzePolicyBeforeBuild(
     reductionReasons.push(`format_cleaning_needed(count=${formatCleaningDecision.instructions.length},saved=${formatCleaningDecision.estimatedSavedChars})`);
     reductionAfterCallPassIds.push("format_cleaning");
   }
-
-  // Add path truncation pass if long paths detected
   if (
     config.reductionEnabled &&
     pathTruncationDecision.instructions.length > 0 &&
@@ -1292,8 +1184,6 @@ function analyzePolicyBeforeBuild(
     reductionReasons.push(`long_paths_detected(count=${pathTruncationDecision.instructions.length},saved=${pathTruncationDecision.estimatedSavedChars})`);
     reductionAfterCallPassIds.push("path_truncation");
   }
-
-  // Add image downsample pass if large images detected
   if (
     config.reductionEnabled &&
     imageDownsampleDecision.instructions.length > 0 &&
@@ -1302,8 +1192,6 @@ function analyzePolicyBeforeBuild(
     reductionReasons.push(`large_images_detected(count=${imageDownsampleDecision.instructions.length},saved=${imageDownsampleDecision.estimatedSavedChars})`);
     reductionAfterCallPassIds.push("image_downsample");
   }
-
-  // Add line number strip pass if line number prefixes detected
   if (
     config.reductionEnabled &&
     lineNumberStripDecision.instructions.length > 0 &&
@@ -1313,7 +1201,6 @@ function analyzePolicyBeforeBuild(
     reductionAfterCallPassIds.push("line_number_strip");
   }
 
-  // Combine all instructions from all analyzers
   const allReductionInstructions: ReductionInstruction[] = [
     ...repeatedReadDecision.instructions,
     ...toolPayloadDecision.instructions,
@@ -1323,12 +1210,7 @@ function analyzePolicyBeforeBuild(
     ...pathTruncationDecision.instructions,
     ...imageDownsampleDecision.instructions,
     ...lineNumberStripDecision.instructions,
-  ].sort((a, b) => b.priority - a.priority); // Sort by priority (higher first)
-
-  // Compaction instructions from analyzer
-  if (compactionDecision.instructions.length > 0) {
-    compactionReasons.push(`compaction_candidates=${compactionDecision.instructions.length}`);
-  }
+  ].sort((a, b) => b.priority - a.priority);
 
   const summaryCooldownActive =
     typeof state.lastSummaryRequestTurn === "number" &&
@@ -1336,9 +1218,6 @@ function analyzePolicyBeforeBuild(
   const handoffCooldownActive =
     typeof state.lastHandoffRequestTurn === "number" &&
     state.completedTurns - state.lastHandoffRequestTurn <= config.handoffCooldownTurns;
-  const compactionCooldownActive =
-    typeof state.lastCompactionRequestTurn === "number" &&
-    state.completedTurns - state.lastCompactionRequestTurn <= config.compactionCooldownTurns;
 
   const requestSummary =
     summaryReasons.length > 0 &&
@@ -1349,12 +1228,6 @@ function analyzePolicyBeforeBuild(
     handoffReasons.length > 0 &&
     !handoffCooldownActive &&
     handoffRoi.recommended;
-  const requestCompaction =
-    compactionSupported &&
-    config.compactionEnabled &&
-    compactionReasons.length > 0 &&
-    !compactionCooldownActive &&
-    compactionRoi.recommended;
 
   let summaryGenerationMode: PolicySemanticGenerationMode = requestSummary
     ? config.summaryGenerationMode
@@ -1362,19 +1235,13 @@ function analyzePolicyBeforeBuild(
   let handoffGenerationMode: PolicySemanticGenerationMode = requestHandoff
     ? config.handoffGenerationMode
     : "heuristic";
-  let compactionGenerationMode: PolicySemanticGenerationMode = requestCompaction
-    ? config.summaryGenerationMode
-    : "heuristic";
   let summaryArbitration: PolicySemanticArbitration = requestSummary ? "direct" : "not_requested";
   let handoffArbitration: PolicySemanticArbitration = requestHandoff ? "direct" : "not_requested";
-  let compactionArbitration: PolicySemanticArbitration = requestCompaction ? "direct" : "not_requested";
   const semanticBudget: PolicySemanticBudgetDecision = {
     configuredGenerationMode:
-      requestCompaction && config.summaryGenerationMode === "llm_full_context"
+      requestHandoff && config.handoffGenerationMode === "llm_full_context"
         ? "llm_full_context"
-        : requestHandoff && config.handoffGenerationMode === "llm_full_context"
-          ? "llm_full_context"
-          : config.summaryGenerationMode,
+        : config.summaryGenerationMode,
     maxLlmCallsThisTurn: 1,
     plannedLlmCalls: [],
     heuristicFallbacks: [],
@@ -1383,22 +1250,19 @@ function analyzePolicyBeforeBuild(
   const llmCandidates: PolicySemanticTarget[] = [];
   if (requestSummary && config.summaryGenerationMode === "llm_full_context") llmCandidates.push("summary");
   if (requestHandoff && config.handoffGenerationMode === "llm_full_context") llmCandidates.push("handoff");
-  if (requestCompaction && config.summaryGenerationMode === "llm_full_context") llmCandidates.push("compaction");
 
   if (llmCandidates.length === 1) {
     const owner = llmCandidates[0];
     semanticBudget.llmBudgetOwner = owner;
     semanticBudget.plannedLlmCalls.push(owner);
     if (owner === "summary") summaryArbitration = "llm_budget_owner";
-    else if (owner === "handoff") handoffArbitration = "llm_budget_owner";
-    else compactionArbitration = "llm_budget_owner";
+    else handoffArbitration = "llm_budget_owner";
   } else if (llmCandidates.length > 1) {
     const roiByTarget: Record<PolicySemanticTarget, PolicyRoiEstimate> = {
       summary: summaryRoi,
       handoff: handoffRoi,
-      compaction: compactionRoi,
     };
-    const priority: PolicySemanticTarget[] = ["compaction", "handoff", "summary"];
+    const priority: PolicySemanticTarget[] = ["handoff", "summary"];
     const llmBudgetOwner = llmCandidates
       .slice()
       .sort((left, right) => {
@@ -1412,7 +1276,6 @@ function analyzePolicyBeforeBuild(
     semanticBudget.heuristicFallbacks.push(...downgradedTargets);
     if (llmBudgetOwner === "summary") summaryArbitration = "llm_budget_owner";
     if (llmBudgetOwner === "handoff") handoffArbitration = "llm_budget_owner";
-    if (llmBudgetOwner === "compaction") compactionArbitration = "llm_budget_owner";
     if (downgradedTargets.includes("summary")) {
       summaryGenerationMode = "heuristic";
       summaryArbitration = "llm_budget_downgrade";
@@ -1420,10 +1283,6 @@ function analyzePolicyBeforeBuild(
     if (downgradedTargets.includes("handoff")) {
       handoffGenerationMode = "heuristic";
       handoffArbitration = "llm_budget_downgrade";
-    }
-    if (downgradedTargets.includes("compaction")) {
-      compactionGenerationMode = "heuristic";
-      compactionArbitration = "llm_budget_downgrade";
     }
   }
 
@@ -1441,8 +1300,6 @@ function analyzePolicyBeforeBuild(
     reductionBeforeCallPassIds: uniqueStrings(reductionBeforeCallPassIds),
     reductionAfterCallPassIds: uniqueStrings(reductionAfterCallPassIds),
     reductionInstructions: allReductionInstructions,
-    compactionReasons: uniqueStrings(compactionReasons),
-    compactionInstructions: compactionDecision.instructions,
     evictionReasons: uniqueStrings(evictionReasons),
     evictionDecision: {
       enabled: config.evictionEnabled,
@@ -1456,16 +1313,12 @@ function analyzePolicyBeforeBuild(
     roi,
     summaryCooldownActive,
     handoffCooldownActive,
-    compactionCooldownActive,
     requestSummary,
     requestHandoff,
-    requestCompaction,
     summaryGenerationMode,
     handoffGenerationMode,
-    compactionGenerationMode,
     summaryArbitration,
     handoffArbitration,
-    compactionArbitration,
     semanticBudget,
     cacheHealth: {
       supported: cacheHealthSupported,
@@ -1509,19 +1362,15 @@ function buildPolicyMetadata(
         semanticEnabled: config.reductionSemanticEnabled,
         semanticMinChars: config.reductionSemanticMinChars,
       },
-      compaction: {
-        enabled: config.compactionEnabled,
-        cooldownTurns: config.compactionCooldownTurns,
-      },
       eviction: {
         enabled: config.evictionEnabled,
         policy: config.evictionPolicy,
         minBlockChars: config.evictionMinBlockChars,
       },
       turnLocal: {
-        enabled: config.turnLocalCompactionEnabled,
-        delayTurns: config.turnLocalCompactionDelayTurns,
-        minChars: config.turnLocalCompactionMinChars,
+        enabled: false,
+        delayTurns: 0,
+        minChars: 0,
       },
       cache: {
         telemetryWindowTurns: config.cacheJitterWindowTurns,
@@ -1544,7 +1393,6 @@ function buildPolicyMetadata(
       recentCacheMissRate: analysis.recentCacheMissRate,
       summaryCooldownActive: analysis.summaryCooldownActive,
       handoffCooldownActive: analysis.handoffCooldownActive,
-      compactionCooldownActive: analysis.compactionCooldownActive,
       recentMissCount: analysis.recentMissCount,
       cacheHealth: {
         mode: analysis.cacheHealth.mode,
@@ -1561,7 +1409,6 @@ function buildPolicyMetadata(
       summaryReasons: analysis.summaryReasons,
       handoffReasons: analysis.handoffReasons,
       reductionReasons: analysis.reductionReasons,
-      compactionReasons: analysis.compactionReasons,
       evictionReasons: analysis.evictionReasons,
       locality: {
         source: analysis.locality.source,
@@ -1580,8 +1427,6 @@ function buildPolicyMetadata(
         handoffCandidateMessageIds: analysis.locality.handoffCandidateMessageIds,
         handoffCandidateChars: analysis.locality.handoffCandidateChars,
         errorCandidateMessageIds: analysis.locality.errorCandidateMessageIds,
-        compactionCandidateBranchIds: analysis.locality.compactionCandidateBranchIds,
-        compactionCandidateReplayChars: analysis.locality.compactionCandidateReplayChars,
       },
       cacheHealth: {
         supported: analysis.cacheHealth.supported,
@@ -1617,17 +1462,6 @@ function buildPolicyMetadata(
         instructions: analysis.reductionInstructions,
         reasons: analysis.reductionReasons,
       },
-      compaction: {
-        supported: apiFamily === "openai-responses",
-        enabled: config.compactionEnabled,
-        purpose: "checkpoint_seed",
-        requested: analysis.requestCompaction,
-        reasons: analysis.requestCompaction ? [...analysis.compactionReasons] : [],
-        cooldownActive: analysis.compactionCooldownActive,
-        generationMode: analysis.compactionGenerationMode,
-        arbitration: analysis.compactionArbitration,
-        instructions: analysis.compactionInstructions,
-      },
       eviction: {
         enabled: config.evictionEnabled,
         policy: analysis.evictionDecision.policy,
@@ -1645,9 +1479,6 @@ function buildPolicyMetadata(
         reductionCandidateMessageIds: analysis.locality.reductionCandidateMessageIds,
         handoffCandidateMessageIds: analysis.locality.handoffCandidateMessageIds,
         errorCandidateMessageIds: analysis.locality.errorCandidateMessageIds,
-        compactionCandidateBranchIds: analysis.locality.compactionCandidateBranchIds,
-        turnLocalCandidateMessageIds: analysis.locality.turnLocalCandidateMessageIds,
-        turnLocalDelayTurns: analysis.locality.turnLocalDelayTurns,
         signals: analysis.locality.signals,
       },
       cacheHealth: {
@@ -2014,27 +1845,6 @@ export function createPolicyModule(cfg: PolicyModuleConfig = {}): RuntimeModule 
         });
       }
 
-      if (policy.decisions.compaction.requested) {
-        state.lastCompactionRequestTurn = state.completedTurns;
-        nextCtx = appendContextEvent(nextCtx, {
-          type: ECOCLAW_EVENT_TYPES.POLICY_COMPACTION_REQUESTED,
-          source: "module-policy",
-          at: new Date().toISOString(),
-          payload: {
-            reasons: policy.decisions.compaction.reasons,
-            cumulativeInputTokens: state.cumulativeInputTokens,
-            turn: state.completedTurns,
-            candidateReplayChars: policy.signals.locality.compactionCandidateReplayChars,
-            candidateBranchIds: policy.signals.locality.compactionCandidateBranchIds,
-            roi: policy.roi.compaction,
-            purpose: policy.decisions.compaction.purpose,
-            generationMode: policy.decisions.compaction.generationMode,
-            arbitration: policy.decisions.compaction.arbitration,
-            semanticBudget: policy.decisions.semantic,
-            apiFamily,
-          },
-        });
-      }
 
       if (policy.decisions.handoff.requested) {
         state.lastHandoffRequestTurn = state.completedTurns;

@@ -103,52 +103,6 @@ export type ReductionDecision = {
 };
 
 // ============================================================================
-// Compaction Decision Types
-// ============================================================================
-
-/**
- * Compaction strategy types for context window management
- */
-export type CompactionStrategy =
-  | "turn_local_evidence_compaction"  // Legacy: compact reads consumed by writes
-  | "tool_result_handle"              // Event-driven: compact finished tool payload into handle
-  | "subtask_seed"                    // Event-driven: compact completed subtask history into seed
-  | "error_path_record"               // Event-driven: compact failed path into minimal error record
-  | "checkpoint_summary"              // Legacy: session-level checkpoint summary
-  | (string & {});                     // Extensible
-
-/**
- * Instruction for a single compaction operation
- */
-export type CompactionInstruction = {
-  /** The strategy to use for this compaction */
-  strategy: CompactionStrategy;
-  /** Target segment IDs to compact */
-  segmentIds: string[];
-  /** Confidence score 0-1 */
-  confidence: number;
-  /** Priority for ordering (higher = process first) */
-  priority: number;
-  /** Human-readable rationale for the decision */
-  rationale: string;
-  /** Strategy-specific parameters */
-  parameters?: Record<string, unknown>;
-};
-
-/**
- * Decision output from Policy to Compaction module
- */
-export type CompactionDecision = {
-  enabled: boolean;
-  /** Instructions for compaction operations */
-  instructions: CompactionInstruction[];
-  /** Total chars that could be saved by following instructions */
-  estimatedSavedChars: number;
-  /** Notes about the decision */
-  notes?: string[];
-};
-
-// ============================================================================
 // Eviction Decision Types
 // ============================================================================
 

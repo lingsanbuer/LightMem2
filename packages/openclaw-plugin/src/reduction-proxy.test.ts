@@ -109,23 +109,15 @@ test("rewritePayloadForStablePrefix preserves content shape and injects dynamic 
   assert.match(out.promptCacheKey, /^ecoclaw-pfx-/);
 });
 
-test("applyProxyReductionToInput runs policy-backed compaction before reduction", async () => {
+test("applyProxyReductionToInput still runs with policy-only before-call modules", async () => {
   const cfg = hooks.normalizeConfig({
     modules: {
       policy: true,
-      compaction: true,
       reduction: false,
-    },
-    compaction: {
-      enabled: true,
-      turnLocalCompaction: {
-        enabled: true,
-      },
     },
   });
 
   const { createPolicyModule } = await import("../../layers/decision/src/policy.js");
-  const { createCompactionModule } = await import("../../layers/execution/src/composer/compaction/index.js");
 
   const payload: any = {
     model: "ecoclaw/gpt-5.4-mini",
@@ -159,19 +151,12 @@ test("applyProxyReductionToInput runs policy-backed compaction before reduction"
     beforeCallModules: {
       policy: createPolicyModule({
         localityEnabled: true,
-        compactionEnabled: true,
-        turnLocalCompactionEnabled: true,
         reductionEnabled: false,
         reductionFormatSlimmingEnabled: false,
         reductionSemanticEnabled: false,
         handoffEnabled: false,
         evictionEnabled: false,
         cacheHealthEnabled: false,
-      }),
-      compaction: createCompactionModule({
-        turnLocalCompaction: {
-          enabled: true,
-        },
       }),
     },
     cfg,

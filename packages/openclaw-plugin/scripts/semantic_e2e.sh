@@ -113,10 +113,6 @@ entry = entries.setdefault("ecoclaw", {})
 entry["enabled"] = True
 config = entry.setdefault("config", {})
 config["stateDir"] = state_dir
-config["compaction"] = {
-    "enabled": False,
-    "autoForkOnPolicy": False,
-}
 embedding = {
     "provider": embedding_provider,
     "requestTimeoutMs": embedding_request_timeout_ms,

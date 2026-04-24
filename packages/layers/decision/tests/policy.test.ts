@@ -4,189 +4,10 @@ import { ECOCLAW_EVENT_TYPES, findRuntimeEventsByType } from "@ecoclaw/kernel";
 import { createPolicyModule, readPolicyOnlineMetadata } from "../src/policy.js";
 import { createContextViewSnapshot, createTurnContext } from "./test-utils.js";
 
-test("policy requests summary and compaction from subtask-boundary locality signals", async () => {
-  const module = createPolicyModule({
-    summaryGenerationMode: "heuristic",
-    compactionEnabled: true,
-    cacheHealthEnabled: false,
-  });
-  const sessionId = "decision-subtask-boundary";
-  const contextView = createContextViewSnapshot({
-    sessionId,
-    activeReplayMessages: [
-      {
-        messageId: "m1",
-        branchId: "branch-main",
-        role: "user",
-        kind: "message",
-        origin: "provider_observed",
-        content: "Implement the cache stabilizer and keep the forwarded payload prefix stable across branches.",
-        createdAt: "2026-04-02T10:00:00.000Z",
-        chars: 88,
-        approxTokens: 22,
-      },
-      {
-        messageId: "m2",
-        branchId: "branch-main",
-        parentMessageId: "m1",
-        role: "assistant",
-        kind: "message",
-        origin: "provider_observed",
-        content: "The stabilizer work is done. The prefix is normalized and the cache-focused tests are passing.",
-        createdAt: "2026-04-02T10:00:01.000Z",
-        chars: 95,
-        approxTokens: 24,
-      },
-      {
-        messageId: "m3",
-        branchId: "branch-main",
-        parentMessageId: "m2",
-        role: "user",
-        kind: "message",
-        origin: "provider_observed",
-        content: "Now switch to the policy layer and redesign it around locality signals instead of token thresholds.",
-        createdAt: "2026-04-02T10:00:02.000Z",
-        chars: 101,
-        approxTokens: 26,
-      },
-      {
-        messageId: "m4",
-        branchId: "branch-main",
-        parentMessageId: "m3",
-        role: "assistant",
-        kind: "message",
-        origin: "provider_observed",
-        content: "I am restructuring the decision logic around locality-aware triggers now.",
-        createdAt: "2026-04-02T10:00:03.000Z",
-        chars: 74,
-        approxTokens: 19,
-      },
-    ],
-  });
-
-  const nextCtx = await module.beforeBuild!(
-    createTurnContext({
-      sessionId,
-      metadata: {
-        stabilizer: {
-          eligible: true,
-          prefixChars: 2400,
-        },
-        contextView,
-      },
-    }),
-    {} as never,
-  );
-  const policy = readPolicyOnlineMetadata(nextCtx.metadata)!;
-
-  assert.equal(policy.decisions.summary.requested, true);
-  assert.equal(policy.decisions.compaction.requested, true);
-  assert.ok(policy.decisions.summary.reasons.includes("locality_subtask_boundary"));
-  assert.ok(policy.decisions.compaction.reasons.includes("locality_subtask_boundary"));
-  assert.deepEqual(policy.decisions.locality.summaryCandidateMessageIds, ["m1", "m2"]);
-  assert.deepEqual(policy.decisions.locality.compactionCandidateBranchIds, ["branch-main"]);
-  assert.equal(
-    findRuntimeEventsByType(nextCtx.metadata, ECOCLAW_EVENT_TYPES.POLICY_SUMMARY_REQUESTED).length,
-    1,
-  );
-  assert.equal(
-    findRuntimeEventsByType(nextCtx.metadata, ECOCLAW_EVENT_TYPES.POLICY_COMPACTION_REQUESTED).length,
-    1,
-  );
-});
-
-test("policy arbitrates shared llm budget between summary and compaction when both are signal-driven", async () => {
-  const module = createPolicyModule({
-    summaryGenerationMode: "llm_full_context",
-    summaryMaxOutputTokens: 256,
-    compactionEnabled: true,
-    cacheHealthEnabled: false,
-  });
-  const sessionId = "decision-signal-arbitration";
-  const contextView = createContextViewSnapshot({
-    sessionId,
-    activeReplayMessages: [
-      {
-        messageId: "m1",
-        branchId: "branch-main",
-        role: "user",
-        kind: "message",
-        origin: "provider_observed",
-        content: "Finish the cache-prefix normalization work and preserve dynamic fields outside the stable prefix.",
-        createdAt: "2026-04-02T10:00:00.000Z",
-        chars: 260,
-        approxTokens: 65,
-      },
-      {
-        messageId: "m2",
-        branchId: "branch-main",
-        parentMessageId: "m1",
-        role: "assistant",
-        kind: "message",
-        origin: "provider_observed",
-        content: "That part is completed and the branch reuse behavior is stable in the latest run.",
-        createdAt: "2026-04-02T10:00:01.000Z",
-        chars: 240,
-        approxTokens: 60,
-      },
-      {
-        messageId: "m3",
-        branchId: "branch-main",
-        parentMessageId: "m2",
-        role: "user",
-        kind: "message",
-        origin: "provider_observed",
-        content: "Next, rebuild the decision layer so locality signals drive summary, reduction, handoff, and compaction.",
-        createdAt: "2026-04-02T10:00:02.000Z",
-        chars: 107,
-        approxTokens: 27,
-      },
-      {
-        messageId: "m4",
-        branchId: "branch-main",
-        parentMessageId: "m3",
-        role: "assistant",
-        kind: "message",
-        origin: "provider_observed",
-        content: "I am rebuilding the decision layer around locality-driven policy routing now.",
-        createdAt: "2026-04-02T10:00:03.000Z",
-        chars: 76,
-        approxTokens: 19,
-      },
-    ],
-  });
-
-  const nextCtx = await module.beforeBuild!(
-    createTurnContext({
-      sessionId,
-      metadata: {
-        stabilizer: {
-          eligible: true,
-          prefixChars: 2400,
-        },
-        contextView,
-      },
-    }),
-    {} as never,
-  );
-  const policy = readPolicyOnlineMetadata(nextCtx.metadata)!;
-
-  assert.equal(policy.decisions.summary.requested, true);
-  assert.equal(policy.decisions.compaction.requested, true);
-  assert.equal(policy.decisions.compaction.generationMode, "llm_full_context");
-  assert.equal(policy.decisions.summary.generationMode, "heuristic");
-  assert.equal(policy.decisions.compaction.arbitration, "llm_budget_owner");
-  assert.equal(policy.decisions.summary.arbitration, "llm_budget_downgrade");
-  assert.deepEqual(policy.decisions.semantic.plannedLlmCalls, ["compaction"]);
-  assert.deepEqual(policy.decisions.semantic.heuristicFallbacks, ["summary"]);
-  assert.equal(policy.decisions.semantic.llmBudgetOwner, "compaction");
-});
-
 test("policy requests handoff from hard-loop locality signals", async () => {
   const module = createPolicyModule({
     handoffEnabled: true,
     handoffGenerationMode: "heuristic",
-    compactionEnabled: false,
     cacheHealthEnabled: false,
     localityHardLoopWindowMessages: 6,
     localityHardLoopMinRepeats: 2,
@@ -286,7 +107,6 @@ test("policy requests handoff from hard-loop locality signals", async () => {
 
 test("policy uses content-type, structural, and error signals to drive reduction", async () => {
   const module = createPolicyModule({
-    compactionEnabled: false,
     cacheHealthEnabled: false,
     localityStructuralPayloadMinChars: 40,
     localityErrorMinChars: 20,
@@ -360,7 +180,6 @@ test("policy uses content-type, structural, and error signals to drive reduction
 
 test("content-type and structural signal scores are independent from chars", async () => {
   const module = createPolicyModule({
-    compactionEnabled: false,
     cacheHealthEnabled: false,
     localityStructuralPayloadMinChars: 1,
   });

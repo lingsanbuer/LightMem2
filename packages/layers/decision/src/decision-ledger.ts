@@ -32,11 +32,6 @@ type SessionLedgerState = {
   cumulativeHandoffInputTokens: number;
   cumulativeHandoffOutputTokens: number;
   cumulativeHandoffCacheReadTokens: number;
-  compactionRequestCount: number;
-  compactionUsageKnownCount: number;
-  cumulativeCompactionInputTokens: number;
-  cumulativeCompactionOutputTokens: number;
-  cumulativeCompactionCacheReadTokens: number;
 };
 
 const toNum = (value: unknown): number | undefined => {
@@ -130,9 +125,6 @@ function collectEvidence(ctx: any, apiFamily: ApiFamily, maxEvidence: number): D
     policy?.decisions.reduction.beforeCallPassIds.length,
   );
   addEvidence(evidence, "policy", "reductionBeforeCallRoiNetTokens", policy?.roi.reduction.beforeCall.netTokens);
-  addEvidence(evidence, "policy", "compactionRequested", policy?.decisions.compaction.requested);
-  addEvidence(evidence, "policy", "compactionGenerationMode", policy?.decisions.compaction.generationMode);
-  addEvidence(evidence, "policy", "compactionRoiNetTokens", policy?.roi.compaction.netTokens);
   addEvidence(evidence, "policy", "semanticLlmBudgetOwner", policy?.decisions.semantic.llmBudgetOwner);
   addEvidence(evidence, "policy", "semanticPlannedLlmCalls", policy?.decisions.semantic.plannedLlmCalls.join(","));
   addEvidence(evidence, "policy", "cacheHealthMode", policy?.decisions.cacheHealth.mode);
@@ -241,20 +233,6 @@ export function createDecisionLedgerModule(cfg: DecisionLedgerModuleConfig = {})
       const handoffOutputTokens = handoffUsage.outputTokens ?? 0;
       const handoffCacheReadTokens = handoffUsage.cacheReadTokens ?? 0;
 
-      const compactionMeta =
-        result.metadata?.compaction && typeof result.metadata.compaction === "object"
-          ? (result.metadata.compaction as Record<string, unknown>)
-          : undefined;
-      const compactionArtifact =
-        compactionMeta?.artifact && typeof compactionMeta.artifact === "object"
-          ? (compactionMeta.artifact as Record<string, unknown>)
-          : undefined;
-      const compactionGeneration = readArtifactGeneration(compactionArtifact);
-      const compactionUsage = readUsageSnapshot(compactionGeneration?.usage);
-      const compactionRequested = Boolean(compactionArtifact);
-      const compactionInputTokens = compactionUsage.inputTokens ?? 0;
-      const compactionOutputTokens = compactionUsage.outputTokens ?? 0;
-      const compactionCacheReadTokens = compactionUsage.cacheReadTokens ?? 0;
 
       const state = stateBySession.get(ctx.sessionId) ?? {
         turn: 0,
@@ -271,11 +249,6 @@ export function createDecisionLedgerModule(cfg: DecisionLedgerModuleConfig = {})
         cumulativeHandoffInputTokens: 0,
         cumulativeHandoffOutputTokens: 0,
         cumulativeHandoffCacheReadTokens: 0,
-        compactionRequestCount: 0,
-        compactionUsageKnownCount: 0,
-        cumulativeCompactionInputTokens: 0,
-        cumulativeCompactionOutputTokens: 0,
-        cumulativeCompactionCacheReadTokens: 0,
       };
       state.turn += 1;
       state.cumulativeInputTokens += inputTokens;
@@ -294,13 +267,6 @@ export function createDecisionLedgerModule(cfg: DecisionLedgerModuleConfig = {})
         state.cumulativeHandoffInputTokens += handoffInputTokens;
         state.cumulativeHandoffOutputTokens += handoffOutputTokens;
         state.cumulativeHandoffCacheReadTokens += handoffCacheReadTokens;
-      }
-      if (compactionRequested) state.compactionRequestCount += 1;
-      if (compactionUsage.usageKnown) {
-        state.compactionUsageKnownCount += 1;
-        state.cumulativeCompactionInputTokens += compactionInputTokens;
-        state.cumulativeCompactionOutputTokens += compactionOutputTokens;
-        state.cumulativeCompactionCacheReadTokens += compactionCacheReadTokens;
       }
       stateBySession.set(ctx.sessionId, state);
 
@@ -321,23 +287,14 @@ export function createDecisionLedgerModule(cfg: DecisionLedgerModuleConfig = {})
         state.cumulativeHandoffCacheReadTokens -
         state.cumulativeHandoffInputTokens -
         state.cumulativeHandoffOutputTokens;
-      const compactionTurnNetTokenBenefit = compactionUsage.usageKnown
-        ? compactionCacheReadTokens - compactionInputTokens - compactionOutputTokens
-        : null;
-      const cumulativeCompactionNetTokenBenefit =
-        state.cumulativeCompactionCacheReadTokens -
-        state.cumulativeCompactionInputTokens -
-        state.cumulativeCompactionOutputTokens;
       const effectiveTurnNetTokenBenefit =
         turnNetTokenBenefit +
         (summaryTurnNetTokenBenefit ?? 0) +
-        (handoffTurnNetTokenBenefit ?? 0) +
-        (compactionTurnNetTokenBenefit ?? 0);
+        (handoffTurnNetTokenBenefit ?? 0);
       const effectiveCumulativeNetTokenBenefit =
         cumulativeNetTokenBenefit +
         cumulativeSummaryNetTokenBenefit +
-        cumulativeHandoffNetTokenBenefit +
-        cumulativeCompactionNetTokenBenefit;
+        cumulativeHandoffNetTokenBenefit;
 
       const outcome = {
         at: now,
@@ -408,41 +365,6 @@ export function createDecisionLedgerModule(cfg: DecisionLedgerModuleConfig = {})
               requested: false,
               usageKnown: false,
             },
-        compactionGeneration: compactionRequested
-          ? {
-              requested: true,
-              usageKnown: compactionUsage.usageKnown,
-              mode: typeof compactionGeneration?.mode === "string" ? compactionGeneration.mode : undefined,
-              provider:
-                typeof compactionGeneration?.provider === "string" ? compactionGeneration.provider : undefined,
-              model: typeof compactionGeneration?.model === "string" ? compactionGeneration.model : undefined,
-              requestedAt:
-                typeof compactionGeneration?.requestedAt === "string"
-                  ? compactionGeneration.requestedAt
-                  : undefined,
-              completedAt:
-                typeof compactionGeneration?.completedAt === "string"
-                  ? compactionGeneration.completedAt
-                  : undefined,
-              usage: {
-                inputTokens: compactionUsage.inputTokens,
-                outputTokens: compactionUsage.outputTokens,
-                cacheReadTokens: compactionUsage.cacheReadTokens,
-              },
-              request:
-                compactionGeneration?.request && typeof compactionGeneration.request === "object"
-                  ? (compactionGeneration.request as Record<string, unknown>)
-                  : undefined,
-              error: typeof compactionGeneration?.error === "string" ? compactionGeneration.error : undefined,
-              roi: {
-                turnNetTokenBenefit: compactionTurnNetTokenBenefit,
-                cumulativeNetTokenBenefit: cumulativeCompactionNetTokenBenefit,
-              },
-            }
-          : {
-              requested: false,
-              usageKnown: false,
-            },
         roi: {
           turnNetTokenBenefit,
           cumulativeNetTokenBenefit,
@@ -450,8 +372,6 @@ export function createDecisionLedgerModule(cfg: DecisionLedgerModuleConfig = {})
           cumulativeSummaryNetTokenBenefit,
           handoffTurnNetTokenBenefit,
           cumulativeHandoffNetTokenBenefit,
-          compactionTurnNetTokenBenefit,
-          cumulativeCompactionNetTokenBenefit,
           effectiveTurnNetTokenBenefit,
           effectiveCumulativeNetTokenBenefit,
         },
@@ -483,7 +403,6 @@ export function createDecisionLedgerModule(cfg: DecisionLedgerModuleConfig = {})
           usage: outcome.usage,
           summaryGeneration: outcome.summaryGeneration,
           handoffGeneration: outcome.handoffGeneration,
-          compactionGeneration: outcome.compactionGeneration,
           roi: outcome.roi,
         },
       });

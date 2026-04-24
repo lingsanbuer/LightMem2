@@ -1,5 +1,61 @@
 import type { RuntimeTurnContext, RuntimeTurnResult } from "@ecoclaw/kernel";
-import type { ContextViewSnapshot } from "@ecoclaw/layer-context";
+import type { PersistedMessageKind, PersistedMessageOrigin, PersistedMessageRole } from "@ecoclaw/kernel";
+
+// Inlined from @ecoclaw/layer-context (being removed)
+export type ContextViewMessageSnapshot = {
+  messageId: string;
+  branchId: string;
+  parentMessageId?: string;
+  role: PersistedMessageRole;
+  kind: PersistedMessageKind;
+  origin: PersistedMessageOrigin;
+  content: string;
+  createdAt: string;
+  chars: number;
+  approxTokens: number;
+  source?: string;
+  replacesMessageIds?: string[];
+  derivedFromArtifactId?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type ContextViewBranchSnapshot = {
+  branchId: string;
+  parentBranchId?: string;
+  forkedFromMessageId?: string;
+  headMessageId?: string;
+  createdAt: string;
+  source: string;
+  directMessageCount: number;
+  replayMessageCount: number;
+  syntheticMessageCount: number;
+  observedMessageCount: number;
+  lineageBranchIds: string[];
+};
+
+type ContextViewStats = {
+  branchCount: number;
+  messageCount: number;
+  syntheticMessageCount: number;
+  observedMessageCount: number;
+  toolMessageCount: number;
+  summaryMessageCount: number;
+  checkpointSeedCount: number;
+};
+
+export type ContextViewSnapshot = {
+  sessionId: string;
+  activeBranchId?: string;
+  meta: null;
+  turnsCount: number;
+  branchCount: number;
+  messageCount: number;
+  activeReplayChars: number;
+  activeReplayTokens: number;
+  activeReplayMessages: ContextViewMessageSnapshot[];
+  branches: ContextViewBranchSnapshot[];
+  stats: ContextViewStats;
+};
 
 export function createTurnContext(overrides: Partial<RuntimeTurnContext> = {}): RuntimeTurnContext {
   return {

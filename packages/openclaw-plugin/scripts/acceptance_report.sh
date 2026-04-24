@@ -8,7 +8,6 @@ OUT_DIR="${ECOCLAW_ACCEPTANCE_REPORT_OUT_DIR:-$PKG_DIR/.tmp/acceptance-report}"
 CACHE_SUMMARY_JSON="${ECOCLAW_CACHE_SUMMARY_JSON:-$PKG_DIR/.tmp/cache-acceptance/summary.json}"
 SEMANTIC_DIR="${ECOCLAW_SEMANTIC_OUT_DIR:-$PKG_DIR/.tmp/semantic-e2e}"
 SUMMARY_DIR="${ECOCLAW_SUMMARY_OUT_DIR:-$PKG_DIR/.tmp/summary-e2e}"
-COMPACTION_DIR="${ECOCLAW_COMPACTION_OUT_DIR:-$PKG_DIR/.tmp/compaction-e2e}"
 RUN_ID="${ECOCLAW_ACCEPTANCE_REPORT_RUN_ID:-$(date +%s)}"
 
 mkdir -p "$OUT_DIR"
@@ -18,17 +17,16 @@ REPORT_MD="$OUT_DIR/report-${RUN_ID}.md"
 LATEST_JSON="$OUT_DIR/report.json"
 LATEST_MD="$OUT_DIR/report.md"
 
-node - "$CACHE_SUMMARY_JSON" "$SEMANTIC_DIR" "$SUMMARY_DIR" "$COMPACTION_DIR" "$REPORT_JSON" "$REPORT_MD" "$RUN_ID" <<'NODE'
+node - "$CACHE_SUMMARY_JSON" "$SEMANTIC_DIR" "$SUMMARY_DIR" "$REPORT_JSON" "$REPORT_MD" "$RUN_ID" <<'NODE'
 const fs = require("fs");
 const path = require("path");
 
 const cacheSummaryJson = process.argv[2];
 const semanticDir = process.argv[3];
 const summaryDir = process.argv[4];
-const compactionDir = process.argv[5];
-const reportJson = process.argv[6];
-const reportMd = process.argv[7];
-const runId = process.argv[8];
+const reportJson = process.argv[5];
+const reportMd = process.argv[6];
+const runId = process.argv[7];
 
 const safeReadJson = (file) => {
   try {
@@ -107,9 +105,6 @@ pushModule("semantic", semanticFile, semanticFile ? safeReadJson(semanticFile) :
 
 const summaryFile = latestMatchingJson(summaryDir);
 pushModule("summary", summaryFile, summaryFile ? safeReadJson(summaryFile) : null);
-
-const compactionFile = latestMatchingJson(compactionDir);
-pushModule("compaction", compactionFile, compactionFile ? safeReadJson(compactionFile) : null);
 
 const overall = {
   moduleCount: moduleEntries.length,

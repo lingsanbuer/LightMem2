@@ -12,11 +12,7 @@ RESTART_GATEWAY="${RESTART_GATEWAY:-1}"
 STATE_DIR="${ECOCLAW_STATE_DIR:-$HOME/.openclaw/ecoclaw-plugin-state}"
 
 SUMMARY_GENERATION_MODE="${SUMMARY_GENERATION_MODE:-heuristic}"
-SUMMARY_FALLBACK_TO_HEURISTIC="${SUMMARY_FALLBACK_TO_HEURISTIC:-1}"
 SUMMARY_MAX_OUTPUT_TOKENS="${SUMMARY_MAX_OUTPUT_TOKENS:-1200}"
-INCLUDE_ASSISTANT_REPLY="${INCLUDE_ASSISTANT_REPLY:-1}"
-COMPACTION_ENABLED="${COMPACTION_ENABLED:-0}"
-
 SESSION_ID="${SESSION_ID:-ecoclaw-summary-e2e-$(date +%s)-$$}"
 OUT_DIR="${ECOCLAW_SUMMARY_E2E_OUT_DIR:-$PKG_DIR/.tmp/summary-e2e}"
 PLUGIN_LOAD_PATH="${PLUGIN_LOAD_PATH:-$PKG_DIR}"
@@ -59,8 +55,7 @@ PY
 
 echo "[summary-e2e] writing temporary plugin config"
 python - <<'PY' "$CONFIG_PATH" "$STATE_DIR" "$PLUGIN_LOAD_PATH" \
-  "$SUMMARY_GENERATION_MODE" "$SUMMARY_FALLBACK_TO_HEURISTIC" "$SUMMARY_MAX_OUTPUT_TOKENS" \
-  "$INCLUDE_ASSISTANT_REPLY" "$COMPACTION_ENABLED"
+  "$SUMMARY_GENERATION_MODE" "$SUMMARY_MAX_OUTPUT_TOKENS"
 import json, sys
 from pathlib import Path
 
@@ -82,13 +77,9 @@ entry = entries.setdefault("ecoclaw", {})
 entry["enabled"] = True
 config = entry.setdefault("config", {})
 config["stateDir"] = state_dir
-config["compaction"] = {
-    "enabled": sys.argv[8] == "1",
-    "autoForkOnPolicy": False,
+config["summary"] = {
     "summaryGenerationMode": sys.argv[4],
-    "summaryFallbackToHeuristic": sys.argv[5] == "1",
-    "summaryMaxOutputTokens": int(sys.argv[6]),
-    "includeAssistantReply": sys.argv[7] == "1",
+    "summaryMaxOutputTokens": int(sys.argv[5]),
 }
 cfg_path.write_text(json.dumps(obj, ensure_ascii=False, indent=2))
 PY
@@ -142,8 +133,6 @@ summary = {
         "policySummaryRequested",
         "summaryGenerated",
         "contextStateUpdated",
-        "compactionPlanNotGenerated",
-        "compactionApplyNotExecuted",
     ],
     "sessionId": entry.get("logicalSessionId") or entry.get("physicalSessionId"),
     "traceAt": entry.get("at"),
@@ -155,8 +144,6 @@ summary = {
         "policySummaryRequested": policy_summary_event is not None,
         "summaryGenerated": summary_event is not None,
         "contextStateUpdated": context_state_event is not None,
-        "compactionPlanNotGenerated": "compaction.plan.generated" not in event_types,
-        "compactionApplyNotExecuted": "compaction.apply.executed" not in event_types,
     },
     "policySummary": (policy_summary_event or {}).get("payload"),
     "summaryArtifact": ((summary_event or {}).get("payload") or {}).get("artifact"),

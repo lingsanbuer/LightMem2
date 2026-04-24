@@ -8,16 +8,15 @@ shift || true
 
 usage() {
   cat <<'EOF'
-usage: ./scripts/e2e.sh [all|cache|cache-multi|cache-fork|semantic|summary|compaction|report] [args...]
+usage: ./scripts/e2e.sh [all|cache|cache-multi|cache-fork|semantic|summary|report] [args...]
 
 modes:
-  all          run cache acceptance, then semantic E2E, then summary E2E, then compaction E2E, then acceptance report
+  all          run cache acceptance, then semantic E2E, then summary E2E, then acceptance report
   cache        run cache acceptance in all mode
   cache-multi  run cache acceptance in multi mode
   cache-fork   run cache acceptance in fork mode
   semantic     run semantic reduction E2E
   summary      run summary E2E
-  compaction   run compaction E2E
   report       build a unified acceptance report from latest artifacts
 
 examples:
@@ -26,7 +25,6 @@ examples:
   TARGET_CLEAN_RUNS=1 ./scripts/e2e.sh cache-fork
   EMBEDDING_PROVIDER=api ./scripts/e2e.sh semantic
   ./scripts/e2e.sh summary
-  ./scripts/e2e.sh compaction
   ./scripts/e2e.sh report
 EOF
 }
@@ -47,11 +45,6 @@ run_summary() {
   bash "$SCRIPT_DIR/summary_e2e.sh" "$@"
 }
 
-run_compaction() {
-  echo "[ecoclaw e2e] compaction mode"
-  bash "$SCRIPT_DIR/compaction_e2e.sh" "$@"
-}
-
 run_report() {
   echo "[ecoclaw e2e] acceptance report mode"
   bash "$SCRIPT_DIR/acceptance_report.sh" "$@"
@@ -62,7 +55,6 @@ case "$MODE" in
     run_cache all "$@"
     run_semantic "$@"
     run_summary "$@"
-    run_compaction "$@"
     run_report "$@"
     ;;
   cache)
@@ -79,9 +71,6 @@ case "$MODE" in
     ;;
   summary)
     run_summary "$@"
-    ;;
-  compaction)
-    run_compaction "$@"
     ;;
   report)
     run_report "$@"

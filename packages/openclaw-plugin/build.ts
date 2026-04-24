@@ -21,11 +21,8 @@ async function main() {
 
   const workerSrc = join(
     process.cwd(),
-    "..",
-    "layers",
-    "execution",
     "src",
-    "composer",
+    "execution",
     "reduction",
     "semantic-llmlingua2-worker.py",
   );

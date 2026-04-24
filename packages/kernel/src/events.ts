@@ -12,15 +12,11 @@ export const ECOCLAW_EVENT_TYPES = {
   REDUCTION_AFTER_CALL_RECORDED: "reduction.after_call.recorded",
   // Policy
   POLICY_SUMMARY_REQUESTED: "policy.summary.requested",
-  POLICY_COMPACTION_REQUESTED: "policy.compaction.requested",
   POLICY_HANDOFF_REQUESTED: "policy.handoff.requested",
   POLICY_CACHE_JITTER_DETECTED: "policy.cache.jitter.detected",
   POLICY_CACHE_HEALTH_DECIDED: "policy.cache.health.decided",
   POLICY_CACHE_HEALTH_RESULT: "policy.cache.health.result",
   POLICY_REDUCTION_DECIDED: "policy.reduction.decided",
-  // Compaction
-  COMPACTION_PLAN_GENERATED: "compaction.plan.generated",
-  COMPACTION_APPLY_EXECUTED: "compaction.apply.executed",
   // Branch materialization
   BRANCH_MATERIALIZED: "branch.materialized",
   // Decision ledger
