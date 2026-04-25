@@ -41,6 +41,15 @@ The OpenClaw runtime loads plugins from `~/.openclaw/extensions/`, not from the 
 
 ## 2. Environment Configuration
 
+### PinchBench runtime install
+
+For the benchmark-side shared runtime profile, use the installer in:
+
+- [install_pinchbench_runtime.sh](/mnt/20t/xubuqiang/EcoClaw/EcoClaw-Bench/scripts/install_pinchbench_runtime.sh)
+
+Profile reference:
+- [pinchbench-runtime-profile.md](/mnt/20t/xubuqiang/EcoClaw/EcoClaw-Bench/docs/pinchbench-runtime-profile.md)
+
 ### Critical: HOME must be /mnt/20t/xubuqiang
 
 All operations must use `HOME=/mnt/20t/xubuqiang`:
