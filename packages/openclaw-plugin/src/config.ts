@@ -34,16 +34,6 @@ export type EcoClawPluginConfig = {
     summaryGenerationMode?: "llm_full_context" | "heuristic";
     summaryMaxOutputTokens?: number;
   };
-  handoff?: {
-    enabled?: boolean;
-    handoffGenerationMode?: "llm_full_context" | "heuristic";
-    handoffFallbackToHeuristic?: boolean;
-    handoffMaxOutputTokens?: number;
-    includeAssistantReply?: boolean;
-    handoffPrompt?: string;
-    handoffPromptPath?: string;
-    handoffCooldownTurns?: number;
-  };
   eviction?: {
     enabled?: boolean;
     policy?: "noop" | "lru" | "lfu" | "gdsf" | "model_scored";
@@ -136,7 +126,6 @@ export function normalizeConfig(
   const stateDir = cfg.stateDir ?? defaultStateDir;
   const modules = cfg.modules ?? {};
   const summary = cfg.summary ?? {};
-  const handoff = cfg.handoff ?? {};
   const eviction = cfg.eviction ?? {};
   const taskStateEstimator = cfg.taskStateEstimator ?? {};
   const semantic = cfg.semanticReduction ?? {};
@@ -185,16 +174,6 @@ export function normalizeConfig(
     summary: {
       summaryGenerationMode: summary.summaryGenerationMode === "llm_full_context" ? "llm_full_context" : "heuristic",
       summaryMaxOutputTokens: Math.max(128, Math.min(8192, summary.summaryMaxOutputTokens ?? 1200)),
-    },
-    handoff: {
-      enabled: handoff.enabled ?? false,
-      handoffGenerationMode: handoff.handoffGenerationMode === "llm_full_context" ? "llm_full_context" : "heuristic",
-      handoffFallbackToHeuristic: handoff.handoffFallbackToHeuristic ?? true,
-      handoffMaxOutputTokens: Math.max(128, Math.min(8192, handoff.handoffMaxOutputTokens ?? 900)),
-      includeAssistantReply: handoff.includeAssistantReply ?? true,
-      handoffPrompt: typeof handoff.handoffPrompt === "string" ? handoff.handoffPrompt : undefined,
-      handoffPromptPath: typeof handoff.handoffPromptPath === "string" ? handoff.handoffPromptPath : undefined,
-      handoffCooldownTurns: Math.max(0, handoff.handoffCooldownTurns ?? 4),
     },
     eviction: {
       enabled: eviction.enabled ?? false,

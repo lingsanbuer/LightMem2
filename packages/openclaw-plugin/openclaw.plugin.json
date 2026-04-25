@@ -138,49 +138,6 @@
           }
         }
       },
-      "handoff": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Task handoff generation controls.",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": false
-          },
-          "handoffGenerationMode": {
-            "type": "string",
-            "enum": [
-              "llm_full_context",
-              "heuristic"
-            ],
-            "default": "heuristic"
-          },
-          "handoffFallbackToHeuristic": {
-            "type": "boolean",
-            "default": true
-          },
-          "handoffMaxOutputTokens": {
-            "type": "number",
-            "description": "Max output tokens for handoff sidecar generation."
-          },
-          "includeAssistantReply": {
-            "type": "boolean",
-            "default": true
-          },
-          "handoffPrompt": {
-            "type": "string",
-            "description": "Inline handoff prompt override used by the handoff module."
-          },
-          "handoffPromptPath": {
-            "type": "string",
-            "description": "Path to a custom handoff prompt file."
-          },
-          "handoffCooldownTurns": {
-            "type": "number",
-            "description": "Cooldown turns after a handoff request before another request is allowed."
-          }
-        }
-      },
       "eviction": {
         "type": "object",
         "additionalProperties": false,
@@ -693,9 +650,6 @@
     },
     "taskStateEstimator": {
       "label": "Task State Estimator"
-    },
-    "handoff": {
-      "label": "Handoff"
     },
     "semanticReduction": {
       "label": "Semantic Reduction"

@@ -12,7 +12,6 @@ The goal is to separate:
 
 - active development helpers
 - release helpers
-- acceptance helpers
 
 from the benchmark-side experiment harness in `EcoClaw-Bench`.
 

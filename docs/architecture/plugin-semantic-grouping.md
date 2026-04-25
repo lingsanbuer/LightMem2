@@ -51,7 +51,7 @@ Typical responsibility:
 
 - canonical state maintenance
 - transcript-to-history sync
-- task/session binding
+- session and turn binding
 - task-aware eviction
 
 ## Group 3: Recovery

@@ -146,7 +146,6 @@
 ### `context-engine.ts`
 - context-engine bootstrap
 - canonical context assemble/compact orchestration
-- task-cache workspace purge wrapper
 
 ### `recovery/common.ts`
 - recovery marker constants
@@ -216,4 +215,6 @@
 - `index.ts` now mainly owns proxy-runtime helper wiring, test hooks, and final plugin export glue.
 - plugin-side legacy `compaction` runtime/config compatibility has been removed.
 - summary controls now live under `plugins.entries.ecoclaw.config.summary.*`.
-- legacy `/ecoclaw` command wiring and task-cache workspace deletion helpers have been removed from the live runtime.
+- legacy `/ecoclaw` command wiring has been removed from the live runtime.
+- `session/topology.ts` now only keeps runtime upstream-session bindings.
+- legacy plugin-local acceptance scripts have been removed; only release helpers remain under `packages/openclaw-plugin/scripts/`.
