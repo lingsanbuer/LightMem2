@@ -388,5 +388,6 @@ export async function ensureExplicitProxyModelsInConfig(
 export function normalizeProxyModelId(model: string): string {
   const value = model.trim();
   if (!value) return value;
-  return value.startsWith("ecoclaw/") ? value.slice("ecoclaw/".length) : value;
+  const stripped = value.startsWith("ecoclaw/") ? value.slice("ecoclaw/".length) : value;
+  return stripped.replace("gpt-5-4-mini", "gpt-5.4-mini");
 }

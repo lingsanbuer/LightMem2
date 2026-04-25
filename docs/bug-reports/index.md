@@ -419,3 +419,102 @@ Mitigation applied:
 
 Caveat:
 - `task_19_spreadsheet_summary` appears to need interpreter-style exec for Excel parsing. Directory-discovery allowlist fixes do not solve that by themselves. Do not casually allowlist `python`/`bash`; prefer a dedicated reader/tool if possible.
+
+## PinchBench `continuous` was only same-agent serial, not true single-session continual
+
+- Symptom:
+  - In newer runs, the baseline first call of each task stayed near a flat floor (`input + cache_read ~= 9.5k`) instead of continuing to climb across tasks.
+  - This made the baseline look as if context was being reset at each task boundary, while eviction-enabled runs still appeared to accumulate history.
+
+- Root cause:
+  - `benchmark.py` correctly reuses one agent and one workspace in `--session-mode continuous`.
+  - However, `lib_agent.py` previously regenerated a fresh `current_session_id` at the start of every task, and again for any `new_session` step inside a task.
+  - This meant PinchBench "continuous" was actually:
+    - same agent
+    - same workspace
+    - serial task order
+    - but **new session per task**
+  - That is a same-agent serial setting, not a true single-session continual benchmark.
+
+- Why this was confusing:
+  - OpenClaw transcript persistence does not use the passed `--session-id` as a stable on-disk filename; `lib_agent.py` already had to resolve the real transcript via `sessions.json` / recent `.jsonl`.
+  - Because EcoClaw also maintains its own canonical history / session topology, some method runs still looked "continual", which masked the benchmark bug.
+
+- Fix:
+  - `continuous` mode now keeps one active session timeline across tasks.
+  - Each new task reuses the currently active session id.
+  - If a task explicitly requests `new_session` in its `frontmatter.sessions[]`, that task step creates a new session and the resulting new session becomes the active session for subsequent tasks.
+  - This preserves task-level multi-session evaluation (for example `task_22_second_brain`) while making cross-task continual execution semantically correct.
+
+- Operational implication:
+  - Old "continuous" runs from before this fix should be treated as same-agent serial, not as strict single-session continual results.
+
+---
+
+## 13. PinchBench continuous was same-agent serial, not true cross-task continual (2026-04-25)
+
+**Severity**: High
+
+**Phenomenon**:
+- Old `continuous` runs reused the same `agent_id` and workspace, but task-to-task context did not always accumulate as a single continual timeline.
+- Baseline-like runs could look as if each task started from a near-reset prompt, while eviction-enabled runs appeared more continual.
+
+**Root Cause**:
+- `benchmark.py` only enforced same-agent serial execution.
+- `lib_agent.py` still generated a fresh `session_id` at the start of each task.
+- This made `continuous` depend on OpenClaw/plugin side effects rather than an explicit benchmark-owned active session timeline.
+
+**Resolution**:
+- Bench now maintains one active `continuous_session_id` across tasks.
+- `execute_openclaw_task(...)` accepts an initial session and returns the final session used by the task.
+- Explicit task-level `new_session` is still honored, and the new session becomes the active session for following tasks.
+
+**Verification**:
+- In continual smoke run `10189`, the first-call `input + cache_read` rose across tasks:
+  - `task_20`: `9517`
+  - `task_21`: `34314`
+  - `task_22`: `39806`
+- This confirmed true cross-task accumulation at the benchmark layer.
+
+---
+
+## 14. plugin history sync must follow real OpenClaw sessionId (2026-04-25)
+
+**Severity**: High
+
+**Phenomenon**:
+- After fixing bench continual semantics, plugin-side history could still be carried across a native `new session` boundary.
+- The benchmark session boundary and plugin-maintained history boundary were not guaranteed to match.
+
+**Root Cause**:
+- Runtime hooks had fallback paths that used `sessionKey` when `upstreamSessionId` was absent.
+- That allowed transcript sync / canonical updates to continue on a logical binding even after a real OpenClaw session boundary should have cut history.
+
+**Resolution**:
+- Plugin runtime history sync now keys on the real OpenClaw `sessionId` only.
+- Removed `sessionKey` fallback from the runtime transcript-sync path and payload session resolution.
+
+**Verification**:
+- In continual no-eviction + estimator smoke run `10192`, task-level continual accumulation remained intact, while `task_22` still graded correctly with explicit `new_session` semantics.
+
+---
+
+## 15. judge tool restriction must not mutate global ecoclaw modules (2026-04-25)
+
+**Severity**: High
+
+**Phenomenon**:
+- Hybrid grading runs became very slow and unstable.
+- Judge setup triggered gateway reloads during evaluation.
+- After the run, the main runtime config was often left in a disabled-module state.
+
+**Root Cause**:
+- `_restrict_judge_tools()` in `lib_grading.py` did not only patch the judge agent entry.
+- It also rewrote global `plugins.entries.ecoclaw.config.modules`, which forced gateway reload/restart and polluted the main experiment config.
+
+**Resolution**:
+- Judge restriction now only patches the judge agent's denied tools.
+- It no longer edits global EcoClaw module config.
+
+**Verification**:
+- In run `10192`, judge setup no longer triggered gateway reload, and the main plugin config remained stable across grading.

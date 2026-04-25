@@ -144,14 +144,17 @@ export async function registerRuntime(api: any, cfg: any, logger: any, deps: any
     return null;
   };
 
+  const resolveBoundUpstreamSessionId = (userMessage: string): string | undefined => {
+    const binding = resolveTurnBinding(userMessage);
+    const upstreamSessionId = String(binding?.upstreamSessionId ?? "").trim();
+    return upstreamSessionId || undefined;
+  };
+
   const resolveSessionIdForPayload = (payload: any): string | undefined => {
-    const promptBinding = resolveTurnBinding(String(payload?.prompt ?? ""));
-    if (promptBinding) {
-      return String(promptBinding.upstreamSessionId ?? promptBinding.sessionKey ?? "").trim() || undefined;
-    }
+    const promptSessionId = resolveBoundUpstreamSessionId(String(payload?.prompt ?? ""));
+    if (promptSessionId) return promptSessionId;
     const lastUser = deps.findLastUserItem(payload?.input);
-    const bound = resolveTurnBinding(deps.extractItemText(lastUser?.userItem));
-    return String(bound?.upstreamSessionId ?? bound?.sessionKey ?? "").trim() || undefined;
+    return resolveBoundUpstreamSessionId(deps.extractItemText(lastUser?.userItem));
   };
 
   let proxyRuntime: Awaited<ReturnType<typeof startEmbeddedResponsesProxy>> | null = null;
@@ -263,21 +266,21 @@ export async function registerRuntime(api: any, cfg: any, logger: any, deps: any
   deps.hookOn(api, "llm_input", async (event: any) => {
     const userMessage = deps.extractLastUserMessage(event);
     const upstreamSessionId = deps.extractOpenClawSessionId(event);
-    const sessionKey = upstreamSessionId || deps.extractSessionKey(event);
+    const sessionKey = deps.extractSessionKey(event);
     if (userMessage.trim() && sessionKey.trim()) {
       rememberTurnBinding(userMessage, sessionKey, upstreamSessionId || undefined);
       if (upstreamSessionId) topology.bindUpstreamSession(sessionKey, upstreamSessionId);
     }
-    if (cfg.stateDir && sessionKey.trim()) {
+    if (cfg.stateDir && upstreamSessionId) {
       const messages = Array.isArray(event?.messages) ? event.messages : [];
-      const transcriptSync = await deps.syncRawSemanticTurnsFromTranscript(cfg.stateDir, sessionKey, {
+      const transcriptSync = await deps.syncRawSemanticTurnsFromTranscript(cfg.stateDir, upstreamSessionId, {
         contentToText: deps.contentToText,
         contextSafeRecovery: deps.contextSafeRecovery,
         memoryFaultRecoverToolName: deps.memoryFaultRecoverToolName,
       });
       await deps.appendTaskStateTrace(cfg.stateDir, {
         stage: "llm_input_received",
-        sessionId: sessionKey,
+        sessionId: upstreamSessionId,
         upstreamSessionId: upstreamSessionId || null,
         messageCount: messages.length,
         hasUserMessage: userMessage.trim().length > 0,
@@ -286,22 +289,21 @@ export async function registerRuntime(api: any, cfg: any, logger: any, deps: any
       });
     }
     if (!deps.debugEnabled) return;
-    logger.debug(`[ecoclaw] llm_input prompt-bound session=${sessionKey || "unknown"} openclawSessionId=${upstreamSessionId || "-"}`);
+    logger.debug(`[ecoclaw] llm_input prompt-bound session=${upstreamSessionId || "pending-session"} openclawSessionId=${upstreamSessionId || "-"}`);
   });
 
   deps.hookOn(api, "llm_output", async (event: any) => {
     const upstreamSessionId = deps.extractOpenClawSessionId(event);
-    const sessionKey = upstreamSessionId || deps.extractSessionKey(event);
-    if (!cfg.stateDir || !sessionKey.trim()) return;
+    if (!cfg.stateDir || !upstreamSessionId) return;
     const messages = Array.isArray(event?.messages) ? event.messages : [];
-    const transcriptSync = await deps.syncRawSemanticTurnsFromTranscript(cfg.stateDir, sessionKey, {
+    const transcriptSync = await deps.syncRawSemanticTurnsFromTranscript(cfg.stateDir, upstreamSessionId, {
       contentToText: deps.contentToText,
       contextSafeRecovery: deps.contextSafeRecovery,
       memoryFaultRecoverToolName: deps.memoryFaultRecoverToolName,
     });
     await deps.appendTaskStateTrace(cfg.stateDir, {
       stage: "llm_output_received",
-      sessionId: sessionKey,
+      sessionId: upstreamSessionId,
       upstreamSessionId: upstreamSessionId || null,
       messageCount: messages.length,
       transcriptTurnCount: transcriptSync.turnCount,
