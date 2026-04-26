@@ -15,12 +15,12 @@ Keep only:
 - settings:
   - `isolated`
   - `continuous`
-- method path:
+- active run paths:
   - current plugin-enabled method runs
+  - single-agent baseline runs
 
 Explicitly defer:
 
-- baseline cleanup and revalidation
 - `ClawEval`
 - `FrontierScience`
 - multi-agent / MAS variants
@@ -40,6 +40,7 @@ repository:
 - `experiments/dataset/pinchbench/scripts/lib_grading.py`
 - `experiments/dataset/pinchbench/scripts/lib_tasks.py`
 - `experiments/scripts/run_method.sh`
+- `experiments/scripts/run_baseline.sh`
 - `experiments/scripts/common.sh`
 - `experiments/scripts/calculate_llm_cost.py`
 - benchmark-owned docs such as runtime-profile and run notes

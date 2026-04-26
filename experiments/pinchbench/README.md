@@ -7,7 +7,9 @@ At the current stage, the migration scope is intentionally narrow:
 
 - dataset: `PinchBench` only
 - settings: `isolated` and `continuous`
-- method path: current plugin-enabled method runs
+- active paths:
+  - current plugin-enabled method runs
+  - single-agent baseline runs
 
 Out of scope for the first consolidation pass:
 
@@ -22,7 +24,7 @@ The migration is now in an intermediate state:
 - dataset tasks and assets have already been copied here
 - dataset-side Python harness files have already been copied here
 - the active single-agent method path now runs from this subtree
-- baseline remains deferred and is not part of the migrated canonical path
+- the active single-agent baseline path now runs from this subtree
 
 ## Current Contents
 
@@ -38,7 +40,7 @@ The migration is now in an intermediate state:
     - `assets/`
     - `scripts/`
 - `scripts/`
-  - current home for the cleaned method-path wrapper surface
+  - current home for the cleaned method-path and baseline wrapper surface
 - `save/`
   - reserved for local run outputs; only directory skeletons should be committed
 
@@ -51,6 +53,5 @@ The first real consolidation target is:
    - PinchBench
    - isolated mode
    - continuous mode
-   - method path only
-3. defer baseline, MAS, and other benchmark families until this active path is
-   stable
+   - single-agent method and baseline paths
+3. defer MAS and other benchmark families until this active path is stable

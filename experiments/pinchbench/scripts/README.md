@@ -8,6 +8,9 @@ method path inside the main repository.
 - `run_method.sh`
   - single-agent method entrypoint
   - supports `isolated` and `continuous`
+- `run_baseline.sh`
+  - single-agent baseline entrypoint
+  - supports `isolated` and `continuous`
 - `common.sh`
   - shared runtime/config helpers for the active method path
 - `calculate_llm_cost.py`
@@ -42,11 +45,19 @@ you are explicitly debugging legacy behavior.
 If your model strings are already fully qualified (for example
 `provider/model-name`), no provider prefix variable is required.
 
+Baseline runs may additionally use:
+
+- `BASELINE_MODEL`
+- `BASELINE_JUDGE`
+- `BASELINE_PROVIDER_PREFIX`
+
+If unset, the baseline entrypoint defaults to shorthand `gpt-5.4-mini` and
+reuses the same provider-prefix resolution path as the method entrypoint.
+
 ## Deferred Surface
 
 The following are intentionally not part of the first active consolidation pass:
 
-- baseline wrappers
 - multi-agent / MAS wrappers
 - agentswing wrappers
 - historical ablation launchers
