@@ -54,25 +54,6 @@ export type EcoClawPluginConfig = {
     evictionPromotionPolicy?: "fifo";
     evictionPromotionHotTailSize?: number;
   };
-  semanticReduction?: {
-    enabled?: boolean;
-    pythonBin?: string;
-    timeoutMs?: number;
-    llmlinguaModelPath?: string;
-    targetRatio?: number;
-    minInputChars?: number;
-    minSavedChars?: number;
-    preselectRatio?: number;
-    maxChunkChars?: number;
-    embedding?: {
-      provider?: "local" | "api" | "none";
-      modelPath?: string;
-      apiBaseUrl?: string;
-      apiKey?: string;
-      apiModel?: string;
-      requestTimeoutMs?: number;
-    };
-  };
   reduction?: {
     engine?: "layered";
     triggerMinChars?: number;
@@ -128,8 +109,6 @@ export function normalizeConfig(
   const summary = cfg.summary ?? {};
   const eviction = cfg.eviction ?? {};
   const taskStateEstimator = cfg.taskStateEstimator ?? {};
-  const semantic = cfg.semanticReduction ?? {};
-  const semanticEmbedding = semantic.embedding ?? {};
   const reduction = cfg.reduction ?? {};
   const reductionPasses = reduction.passes ?? {};
   const reductionPassOptions = reduction.passOptions ?? {};
@@ -195,25 +174,6 @@ export function normalizeConfig(
       evictionPromotionPolicy: taskStateEstimator.evictionPromotionPolicy === "fifo" ? "fifo" : envTaskStateEstimatorEvictionPromotionPolicy === "fifo" ? "fifo" : "fifo",
       evictionPromotionHotTailSize: Math.max(0, taskStateEstimator.evictionPromotionHotTailSize ?? (Number.isFinite(envTaskStateEstimatorEvictionPromotionHotTailSize) ? envTaskStateEstimatorEvictionPromotionHotTailSize : 1)),
     },
-    semanticReduction: {
-      enabled: semantic.enabled ?? false,
-      pythonBin: semantic.pythonBin ?? "python",
-      timeoutMs: Math.max(1000, Math.min(300000, semantic.timeoutMs ?? 120000)),
-      llmlinguaModelPath: semantic.llmlinguaModelPath,
-      targetRatio: typeof semantic.targetRatio === "number" ? Math.min(0.95, Math.max(0.05, semantic.targetRatio)) : 0.55,
-      minInputChars: Math.max(256, semantic.minInputChars ?? 4000),
-      minSavedChars: Math.max(32, semantic.minSavedChars ?? 200),
-      preselectRatio: typeof semantic.preselectRatio === "number" ? Math.min(1, Math.max(0.05, semantic.preselectRatio)) : 0.8,
-      maxChunkChars: Math.max(256, semantic.maxChunkChars ?? 1400),
-      embedding: {
-        provider: semanticEmbedding.provider === "local" || semanticEmbedding.provider === "api" || semanticEmbedding.provider === "none" ? semanticEmbedding.provider : "none",
-        modelPath: semanticEmbedding.modelPath,
-        apiBaseUrl: semanticEmbedding.apiBaseUrl,
-        apiKey: semanticEmbedding.apiKey,
-        apiModel: semanticEmbedding.apiModel,
-        requestTimeoutMs: Math.max(1000, Math.min(120000, semanticEmbedding.requestTimeoutMs ?? 30000)),
-      },
-    },
     reduction: {
       engine: "layered" as const,
       triggerMinChars: Math.max(256, reduction.triggerMinChars ?? 2200),
@@ -232,7 +192,6 @@ export function normalizeConfig(
         execOutputTruncation: reductionPassOptions.execOutputTruncation && typeof reductionPassOptions.execOutputTruncation === "object" ? { ...reductionPassOptions.execOutputTruncation } : {},
         agentsStartupOptimization: reductionPassOptions.agentsStartupOptimization && typeof reductionPassOptions.agentsStartupOptimization === "object" ? { ...reductionPassOptions.agentsStartupOptimization } : {},
         formatSlimming: reductionPassOptions.formatSlimming && typeof reductionPassOptions.formatSlimming === "object" ? { ...reductionPassOptions.formatSlimming } : {},
-        semanticLlmlingua2: reductionPassOptions.semanticLlmlingua2 && typeof reductionPassOptions.semanticLlmlingua2 === "object" ? { ...reductionPassOptions.semanticLlmlingua2 } : {},
         formatCleaning: reductionPassOptions.formatCleaning && typeof reductionPassOptions.formatCleaning === "object" ? { ...reductionPassOptions.formatCleaning } : {},
         pathTruncation: reductionPassOptions.pathTruncation && typeof reductionPassOptions.pathTruncation === "object" ? { ...reductionPassOptions.pathTruncation } : {},
         imageDownsample: reductionPassOptions.imageDownsample && typeof reductionPassOptions.imageDownsample === "object" ? { ...reductionPassOptions.imageDownsample } : {},

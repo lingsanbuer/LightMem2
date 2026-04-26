@@ -6,7 +6,6 @@ export * from "./pass-html-slimming.js";
 export * from "./pass-exec-output-truncation.js";
 export * from "./pass-agents-startup-optimization.js";
 export * from "./pass-format-slimming.js";
-export * from "./pass-semantic-llmlingua2.js";
 export * from "./pass-format-cleaning.js";
 export * from "./pass-path-truncation.js";
 export * from "./pass-image-downsample.js";

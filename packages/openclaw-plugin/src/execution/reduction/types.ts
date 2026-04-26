@@ -4,7 +4,6 @@ export type BuiltinReductionPassId =
   | "tool_payload_trim"
   | "html_slimming"
   | "format_slimming"
-  | "semantic_llmlingua2"
   | "exec_output_truncation"
   | "repeated_read_dedup"
   | "format_cleaning"
@@ -127,29 +126,4 @@ export type ReductionModuleConfig = {
   maxToolChars?: number;
   strategy?: "rule" | "llmlingua2";
   passOptions?: Record<string, Record<string, unknown>>;
-  semanticLlmlingua2?: SemanticLlmlingua2Config;
-};
-
-export type SemanticEmbeddingProviderKind = "local" | "api" | "none";
-
-export type SemanticLlmlingua2EmbeddingConfig = {
-  provider?: SemanticEmbeddingProviderKind;
-  modelPath?: string;
-  apiBaseUrl?: string;
-  apiKey?: string;
-  apiModel?: string;
-  requestTimeoutMs?: number;
-};
-
-export type SemanticLlmlingua2Config = {
-  enabled?: boolean;
-  pythonBin?: string;
-  timeoutMs?: number;
-  modelPath?: string;
-  targetRatio?: number;
-  minInputChars?: number;
-  minSavedChars?: number;
-  preselectRatio?: number;
-  maxChunkChars?: number;
-  embedding?: SemanticLlmlingua2EmbeddingConfig;
 };

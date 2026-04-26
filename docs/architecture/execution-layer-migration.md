@@ -45,7 +45,6 @@ Status: completed on 2026-04-24.
 | 模块 | 状态 | 原因 |
 |------|------|------|
 | `compaction/*` | 已删除 | plugin runtime 已断开，layer-side compaction implementation removed |
-| `semantic/*` | 默认关闭 | `semanticReduction.enabled = false`，需要 `llmlinguaModelPath` 配置才触发 |
 
 ---
 
@@ -72,7 +71,6 @@ openclaw-plugin/src/
       pass-path-truncation.ts
       pass-image-downsample.ts
       pass-line-number-strip.ts
-      pass-semantic-llmlingua2.ts
       index.ts
     archive-recovery/
       index.ts

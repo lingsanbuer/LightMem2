@@ -247,85 +247,6 @@
           }
         }
       },
-      "semanticReduction": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Optional semantic LLMLingua2 reduction settings for after-call compression.",
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": false
-          },
-          "pythonBin": {
-            "type": "string",
-            "description": "Python executable used to run the LLMLingua2 worker."
-          },
-          "timeoutMs": {
-            "type": "number",
-            "default": 120000
-          },
-          "llmlinguaModelPath": {
-            "type": "string",
-            "description": "Local path to the LLMLingua2 token-classification model."
-          },
-          "targetRatio": {
-            "type": "number",
-            "description": "Target semantic keep ratio between 0.05 and 0.95."
-          },
-          "minInputChars": {
-            "type": "number",
-            "description": "Minimum response length before semantic reduction is attempted."
-          },
-          "minSavedChars": {
-            "type": "number",
-            "description": "Minimum saved characters required to accept semantic reduction."
-          },
-          "preselectRatio": {
-            "type": "number",
-            "description": "Chunk preselection ratio before LLMLingua2 compression."
-          },
-          "maxChunkChars": {
-            "type": "number",
-            "description": "Chunk size used by semantic reduction worker."
-          },
-          "embedding": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "provider": {
-                "type": "string",
-                "enum": [
-                  "local",
-                  "api",
-                  "none"
-                ],
-                "default": "none"
-              },
-              "modelPath": {
-                "type": "string",
-                "description": "Local path to the embedding model when provider=local."
-              },
-              "apiBaseUrl": {
-                "type": "string",
-                "description": "OpenAI-compatible embeddings base URL when provider=api."
-              },
-              "apiKey": {
-                "type": "string",
-                "sensitive": true,
-                "description": "API key for embeddings when provider=api."
-              },
-              "apiModel": {
-                "type": "string",
-                "description": "Embedding model name when provider=api."
-              },
-              "requestTimeoutMs": {
-                "type": "number",
-                "default": 30000
-              }
-            }
-          }
-        }
-      },
       "reduction": {
         "type": "object",
         "additionalProperties": false,
@@ -528,10 +449,6 @@
                   }
                 }
               },
-              "semanticLlmlingua2": {
-                "type": "object",
-                "additionalProperties": true
-              },
               "formatCleaning": {
                 "type": "object",
                 "additionalProperties": true,
@@ -650,9 +567,6 @@
     },
     "taskStateEstimator": {
       "label": "Task State Estimator"
-    },
-    "semanticReduction": {
-      "label": "Semantic Reduction"
     },
     "reduction": {
       "label": "Reduction"

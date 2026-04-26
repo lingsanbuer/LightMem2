@@ -1,6 +1,6 @@
 import { build } from "esbuild";
-import { copyFile, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { copyFile } from "node:fs/promises";
+import { join } from "node:path";
 
 async function main() {
   await build({
@@ -18,17 +18,6 @@ async function main() {
       "empty-import-meta": "silent",
     },
   });
-
-  const workerSrc = join(
-    process.cwd(),
-    "src",
-    "execution",
-    "reduction",
-    "semantic-llmlingua2-worker.py",
-  );
-  const workerDest = join(process.cwd(), "dist", "semantic-llmlingua2-worker.py");
-  await mkdir(dirname(workerDest), { recursive: true });
-  await copyFile(workerSrc, workerDest);
 
   // Keep the runtime manifest beside the bundled extension entry so the local
   // OpenClaw extension directory can be synced directly from dist/.

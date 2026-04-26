@@ -1,6 +1,5 @@
 import { formatSlimmingPass } from "../passes/pass-format-slimming.js";
 import { htmlSlimmingPass } from "../passes/pass-html-slimming.js";
-import { semanticLlmlingua2Pass } from "../passes/pass-semantic-llmlingua2.js";
 import { toolPayloadTrimPass } from "../passes/pass-tool-payload-trim.js";
 import { execOutputTruncationPass, execOutputTruncationBeforeCall } from "../passes/pass-exec-output-truncation.js";
 import { repeatedReadDedupPass } from "../passes/pass-repeated-read-dedup.js";
@@ -20,7 +19,6 @@ const BUILTIN_PASSES: Record<BuiltinReductionPassId, ReductionPassHandler> = {
   tool_payload_trim: toolPayloadTrimPass,
   html_slimming: htmlSlimmingPass,
   format_slimming: formatSlimmingPass,
-  semantic_llmlingua2: semanticLlmlingua2Pass,
   exec_output_truncation: execOutputTruncationPass,
   repeated_read_dedup: repeatedReadDedupPass,
   format_cleaning: formatCleaningPass,
