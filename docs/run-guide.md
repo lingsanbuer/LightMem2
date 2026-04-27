@@ -3,14 +3,8 @@
 ## Scope
 
 This file is a short runtime sanity guide for local development of the
-plugin runtime adapter. Benchmark-specific runtime setup lives in the
-benchmark harness repository for now.
-
-The two paths below are the current local layout on this machine, not a
-stable brand-facing contract:
-
-- `/mnt/20t/xubuqiang/EcoClaw/TokenPilot-Bench/scripts/install_pinchbench_runtime.sh`
-- `/mnt/20t/xubuqiang/EcoClaw/TokenPilot-Bench/docs/pinchbench-runtime-profile.md`
+plugin runtime adapter. Benchmark-specific runtime setup still lives in a
+sibling benchmark harness checkout for now.
 
 Use this guide when you need to verify:
 
@@ -93,8 +87,8 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 ```
 
 If you are using the shared PinchBench runtime profile, prefer the benchmark
-installer and profile linked at the top of this file instead of hand-editing
-host-runtime config here.
+installer and profile from that sibling harness checkout instead of
+hand-editing host-runtime config here.
 
 ## Smoke Test Order
 

@@ -89,11 +89,8 @@ provider-prefix variable is not required.
 
 ## One-click installer
 
-For the current external harness layout, the shared runtime is prepared by:
-
-```bash
-bash /mnt/20t/xubuqiang/EcoClaw/EcoClaw-Bench/scripts/install_pinchbench_runtime.sh
-```
+For the current external harness layout, the shared runtime is prepared by the
+PinchBench runtime installer in the sibling benchmark checkout.
 
 That installer currently:
 

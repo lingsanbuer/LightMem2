@@ -5,14 +5,14 @@ set -euo pipefail
 # Sets up a local gateway with proxy for testing
 
 SRC_HOME="${SRC_HOME:-/mnt/20t/xubuqiang}"
-SMOKE_HOME="${SMOKE_HOME:-/tmp/ecoclaw-smoke-home}"
+SMOKE_HOME="${SMOKE_HOME:-/tmp/tokenpilot-smoke-home}"
 GATEWAY_PORT="${GATEWAY_PORT:-28890}"
 PROXY_PORT="${PROXY_PORT:-17690}"
-UPSTREAM_BASE_URL="${ECOCLAW_BASE_URL:-https://kuaipao.ai/v1}"
-UPSTREAM_API_KEY="${ECOCLAW_API_KEY:-sk-Nf0gcBreOAX9tt0ruwccdpGXyDydIHHXat9e52HByWqLH40g}"
-UPSTREAM_HTTP_PROXY="${ECOCLAW_UPSTREAM_HTTP_PROXY:-http://127.0.0.1:4444}"
-UPSTREAM_HTTPS_PROXY="${ECOCLAW_UPSTREAM_HTTPS_PROXY:-$UPSTREAM_HTTP_PROXY}"
-UPSTREAM_NO_PROXY="${ECOCLAW_UPSTREAM_NO_PROXY:-127.0.0.1,localhost}"
+UPSTREAM_BASE_URL="${TOKENPILOT_BASE_URL:-${ECOCLAW_BASE_URL:-https://kuaipao.ai/v1}}"
+UPSTREAM_API_KEY="${TOKENPILOT_API_KEY:-${ECOCLAW_API_KEY:-}}"
+UPSTREAM_HTTP_PROXY="${TOKENPILOT_UPSTREAM_HTTP_PROXY:-${ECOCLAW_UPSTREAM_HTTP_PROXY:-http://127.0.0.1:4444}}"
+UPSTREAM_HTTPS_PROXY="${TOKENPILOT_UPSTREAM_HTTPS_PROXY:-${ECOCLAW_UPSTREAM_HTTPS_PROXY:-$UPSTREAM_HTTP_PROXY}}"
+UPSTREAM_NO_PROXY="${TOKENPILOT_UPSTREAM_NO_PROXY:-${ECOCLAW_UPSTREAM_NO_PROXY:-127.0.0.1,localhost}}"
 STAMP="$(date +%s)"
 RUNTIME_HOME="${SMOKE_HOME}/${STAMP}"
 LOG_FILE="${RUNTIME_HOME}/gateway.log"
@@ -20,10 +20,10 @@ LOG_FILE="${RUNTIME_HOME}/gateway.log"
 # Setup runtime home
 mkdir -p "${RUNTIME_HOME}"
 cp -a "${SRC_HOME}/.openclaw" "${RUNTIME_HOME}/.openclaw"
-rm -f "${RUNTIME_HOME}/.openclaw/ecoclaw-plugin-state/ecoclaw/proxy-requests.jsonl"
-rm -f "${RUNTIME_HOME}/.openclaw/ecoclaw-plugin-state/ecoclaw/provider-traffic.jsonl"
-rm -f "${RUNTIME_HOME}/.openclaw/ecoclaw-plugin-state/ecoclaw/event-trace.jsonl"
-rm -f "${RUNTIME_HOME}/.openclaw/ecoclaw-plugin-state/ecoclaw/upstream-transport-trace.jsonl"
+rm -f "${RUNTIME_HOME}/.openclaw/tokenpilot-plugin-state/tokenpilot/proxy-requests.jsonl"
+rm -f "${RUNTIME_HOME}/.openclaw/tokenpilot-plugin-state/tokenpilot/provider-traffic.jsonl"
+rm -f "${RUNTIME_HOME}/.openclaw/tokenpilot-plugin-state/tokenpilot/event-trace.jsonl"
+rm -f "${RUNTIME_HOME}/.openclaw/tokenpilot-plugin-state/tokenpilot/upstream-transport-trace.jsonl"
 
 # Configure openclaw.json
 python3 - <<PY
@@ -33,14 +33,14 @@ with open(p, 'r', encoding='utf-8') as f:
     obj = json.load(f)
 obj.setdefault('gateway', {})['port'] = int(${GATEWAY_PORT@Q})
 plugins = obj.setdefault('plugins', {}).setdefault('entries', {})
-ecoclaw = plugins.setdefault('ecoclaw', {}).setdefault('config', {})
-ecoclaw['proxyPort'] = int(${PROXY_PORT@Q})
-ecoclaw['proxyBaseUrl'] = ${UPSTREAM_BASE_URL@Q}
-ecoclaw['proxyApiKey'] = ${UPSTREAM_API_KEY@Q}
+tokenpilot = plugins.setdefault('tokenpilot', {}).setdefault('config', {})
+tokenpilot['proxyPort'] = int(${PROXY_PORT@Q})
+tokenpilot['proxyBaseUrl'] = ${UPSTREAM_BASE_URL@Q}
+tokenpilot['proxyApiKey'] = ${UPSTREAM_API_KEY@Q}
 providers = obj.setdefault('models', {}).setdefault('providers', {})
-providers['ecoclaw'] = {
+providers['tokenpilot'] = {
     'baseUrl': f"http://127.0.0.1:{int(${PROXY_PORT@Q})}/v1",
-    'apiKey': 'ecoclaw-local',
+    'apiKey': 'tokenpilot-local',
     'api': 'openai-responses',
     'authHeader': False,
     'models': [
@@ -56,7 +56,7 @@ providers['ecoclaw'] = {
         },
     ],
 }
-obj.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'ecoclaw/gpt-5.4-mini'
+obj.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = 'tokenpilot/gpt-5.4-mini'
 obj['agents']['defaults']['model']['fallbacks'] = []
 with open(p, 'w', encoding='utf-8') as f:
     json.dump(obj, f, indent=2, ensure_ascii=False)
@@ -69,9 +69,9 @@ nohup env \
   HOME="${RUNTIME_HOME}" \
   XDG_CACHE_HOME="${RUNTIME_HOME}/.cache" \
   XDG_CONFIG_HOME="${RUNTIME_HOME}/.config" \
-  ECOCLAW_UPSTREAM_HTTP_PROXY="${UPSTREAM_HTTP_PROXY}" \
-  ECOCLAW_UPSTREAM_HTTPS_PROXY="${UPSTREAM_HTTPS_PROXY}" \
-  ECOCLAW_UPSTREAM_NO_PROXY="${UPSTREAM_NO_PROXY}" \
+  TOKENPILOT_UPSTREAM_HTTP_PROXY="${UPSTREAM_HTTP_PROXY}" \
+  TOKENPILOT_UPSTREAM_HTTPS_PROXY="${UPSTREAM_HTTPS_PROXY}" \
+  TOKENPILOT_UPSTREAM_NO_PROXY="${UPSTREAM_NO_PROXY}" \
   openclaw gateway run --force --port "${GATEWAY_PORT}" >"${LOG_FILE}" 2>&1 &
 GW_PID=$!
 
@@ -135,4 +135,4 @@ echo "=== main log tail ==="
 tail -n 80 /tmp/openclaw/openclaw-$(date +%F).log || true
 
 echo "=== trace files ==="
-find "${RUNTIME_HOME}/.openclaw/ecoclaw-plugin-state/ecoclaw" -maxdepth 1 -type f | sort || true
+find "${RUNTIME_HOME}/.openclaw/tokenpilot-plugin-state/tokenpilot" -maxdepth 1 -type f | sort || true

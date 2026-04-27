@@ -62,7 +62,7 @@ OpenClaw adapter layer.
 ### OpenClaw request/response transport details
 
 - local `/v1/responses` proxy runtime
-- provider mirroring under `ecoclaw/*`
+- provider mirroring under `tokenpilot/*`
 - upstream probing / fetch fallback / curl fallback
 - OpenClaw response payload patching
 
@@ -75,10 +75,10 @@ OpenClaw adapter layer.
 
 ### OpenClaw protocol markers and compatibility surface
 
-- `ecoclaw` plugin id
-- `ecoclaw-context`
-- `ecoclaw/*`
-- `ECOCLAW_*`
+- `tokenpilot` plugin id
+- `layered-context`
+- `tokenpilot/*`
+- `TOKENPILOT_*`
 - recovery/payload markers already in live runtime traffic
 
 ## What should gradually move toward runtime-agnostic layers

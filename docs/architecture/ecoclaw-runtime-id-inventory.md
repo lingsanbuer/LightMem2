@@ -1,8 +1,8 @@
-# Legacy `ecoclaw` Runtime Naming Inventory
+# Legacy Runtime Naming Inventory
 
 ## Purpose
 
-This document records the remaining legacy `ecoclaw` naming surface after the
+This document records the remaining legacy runtime naming surface after the
 adapter split into:
 
 - `packages/kernel`
@@ -26,7 +26,7 @@ spans four layers:
 3. `runtime-core`
 4. `openclaw-plugin`
 
-That split matters because some `ecoclaw` names are now:
+That split matters because the remaining legacy names now fall into:
 
 - adapter-only runtime ids
 - shared workspace package names
@@ -96,8 +96,8 @@ changed during a simple brand refresh.
 ### Prompt / payload / persisted markers
 
 These are protocol markers, persisted content markers, or stable cache-key
-formats. Renaming them carelessly would break compatibility or invalidate
-persisted state.
+formats. Most of the human-facing text is already neutralized, but the
+remaining keys still matter for runtime compatibility.
 
 - [recovery-protocol.ts](/mnt/20t/xubuqiang/EcoClaw/TokenPilot/packages/openclaw-plugin/src/context-stack/page-in/recovery-protocol.ts)
   - `[Recovery Protocol]`
@@ -106,7 +106,7 @@ persisted state.
 - [reduction-context.ts](/mnt/20t/xubuqiang/EcoClaw/TokenPilot/packages/openclaw-plugin/src/context-stack/request-preprocessing/reduction-context.ts)
   - `[persisted tool result]`
 - [tool-result-persist.ts](/mnt/20t/xubuqiang/EcoClaw/TokenPilot/packages/runtime-core/src/archive-recovery/tool-result-persist.ts)
-  - preview / persist markers containing `ecoclaw`
+  - neutral persisted-tool-result notices
 - [stable-prefix.ts](/mnt/20t/xubuqiang/EcoClaw/TokenPilot/packages/openclaw-plugin/src/context-stack/request-preprocessing/stable-prefix.ts)
   - `runtime-pfx-*`
 - [upstream.ts](/mnt/20t/xubuqiang/EcoClaw/TokenPilot/packages/openclaw-plugin/src/context-stack/integration/upstream.ts)
@@ -125,8 +125,8 @@ This migration has already landed. The active package namespace is now:
 - [packages/runtime-core/package.json](/mnt/20t/xubuqiang/EcoClaw/TokenPilot/packages/runtime-core/package.json)
   - `@tokenpilot/runtime-core`
 
-So workspace package names are no longer part of the live legacy `ecoclaw`
-runtime surface.
+So workspace package names are no longer part of the live legacy runtime
+surface.
 
 ## Class B: Internal Low-Risk Names
 
@@ -213,9 +213,8 @@ Only the first two belong in the next pass.
 
 ## Summary
 
-At this point the ugly part of the old name is concentrated in runtime
-contracts, workspace package names, persisted state paths, and compatibility
-markers.
+At this point the remaining legacy surface is concentrated in env fallbacks,
+state-path compatibility, and a few recovery/reduction protocol keys.
 
 That means the project is in a good position for:
 
