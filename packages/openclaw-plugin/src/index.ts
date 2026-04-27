@@ -173,7 +173,7 @@ module.exports = {
     }
 
     if (cfg.contextEngine.enabled && typeof api.registerContextEngine === "function") {
-      api.registerContextEngine("ecoclaw-context", () => createPluginContextEngine(cfg, logger, {
+      api.registerContextEngine("layered-context", () => createPluginContextEngine(cfg, logger, {
         appendTaskStateTrace,
         readTranscriptEntriesForSession,
         transcriptMessageStableId,

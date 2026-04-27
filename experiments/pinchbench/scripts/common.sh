@@ -297,7 +297,7 @@ entries = plugins.setdefault("entries", {})
 ecoclaw = entries.setdefault("ecoclaw", {})
 ecoclaw["enabled"] = True
 slots = plugins.setdefault("slots", {})
-slots["contextEngine"] = "ecoclaw-context"
+slots["contextEngine"] = "layered-context"
 ecoclaw_cfg = ecoclaw.setdefault("config", {})
 ecoclaw_cfg["enabled"] = True
 ecoclaw_cfg["proxyAutostart"] = True
@@ -437,7 +437,7 @@ with open(config_path, "r", encoding="utf-8") as f:
     cfg = json.load(f)
 
 plugins = cfg.setdefault("plugins", {})
-plugins.setdefault("slots", {}).setdefault("contextEngine", "ecoclaw-context")
+plugins.setdefault("slots", {}).setdefault("contextEngine", "layered-context")
 ecoclaw_entry = plugins.setdefault("entries", {}).setdefault("ecoclaw", {})
 ecoclaw_entry["enabled"] = True
 ecoclaw_cfg = ecoclaw_entry.setdefault("config", {})

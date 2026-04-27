@@ -6,8 +6,8 @@ export function createPluginContextEngine(cfg: any, logger: any, deps: any) {
   const canonicalMessageTaskIdsBound = (message: Record<string, unknown>): string[] => deps.canonicalMessageTaskIds(message, deps.asRecord);
   return {
     info: {
-      id: "ecoclaw-context",
-      name: "TokenPilot Context Engine",
+      id: "layered-context",
+      name: "Layered Context Engine",
     },
     async ingest() {
       return { ingested: false };

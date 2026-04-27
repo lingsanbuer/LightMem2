@@ -31,7 +31,7 @@ It does not cover README or documentation-only wording.
 ### Plugin/runtime ids
 
 - plugin id: `ecoclaw`
-- context-engine id: `ecoclaw-context`
+- context-engine id: `layered-context`
 - provider namespace: `ecoclaw/*`
 
 ### Environment variables
@@ -75,7 +75,7 @@ names.
 Target aliases:
 
 - plugin-facing brand alias: `tokenpilot`
-- context-engine alias: `tokenpilot-context`
+- context-engine alias: `layered-context`
 - provider alias: `tokenpilot/*`
 - env aliases: `TOKENPILOT_*`
 
@@ -151,12 +151,12 @@ If not:
 
 Preferred:
 
-- support both `ecoclaw-context` and `tokenpilot-context`
+- support both `ecoclaw-context` and `layered-context`
 
 Fallback:
 
-- keep `ecoclaw-context` registered
-- only expose `tokenpilot-context` in docs after explicit adapter support lands
+- prefer `layered-context` as the neutral slot name
+- keep `ecoclaw-context` compatibility only if host/runtime validation shows it is still needed
 
 ### Environment variables
 

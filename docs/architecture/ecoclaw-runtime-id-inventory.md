@@ -50,9 +50,9 @@ changed during a simple brand refresh.
 ### Context-engine identity
 
 - [context-engine.ts](/mnt/20t/xubuqiang/EcoClaw/EcoClaw/packages/openclaw-plugin/src/context-stack/integration/context-engine.ts)
-  - `id: "ecoclaw-context"`
+  - `id: "layered-context"`
 - [index.ts](/mnt/20t/xubuqiang/EcoClaw/EcoClaw/packages/openclaw-plugin/src/index.ts)
-  - `api.registerContextEngine("ecoclaw-context", ...)`
+  - `api.registerContextEngine("layered-context", ...)`
 
 ### Provider namespace
 
