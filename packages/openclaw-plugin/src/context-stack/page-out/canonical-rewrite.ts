@@ -7,7 +7,7 @@ import {
   loadCanonicalState,
   type EcoCanonicalState,
 } from "./canonical-state.js";
-import { applyCanonicalEviction } from "../../canonical/eviction.js";
+import { applyCanonicalEviction } from "./canonical-eviction.js";
 
 type SyncHelpers<TEntry> = {
   appendTaskStateTrace: (stateDir: string, payload: Record<string, unknown>) => Promise<void>;

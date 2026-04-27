@@ -70,7 +70,7 @@ Current files:
 - `src/context-stack/page-out/canonical-state.ts`
 - `src/context-stack/page-out/canonical-anchors.ts`
 - `src/context-stack/page-out/canonical-rewrite.ts`
-- `src/canonical/eviction.ts`
+- `src/context-stack/page-out/canonical-eviction.ts`
 - `src/session/topology.ts`
 - `src/session/turn-bindings.ts`
 

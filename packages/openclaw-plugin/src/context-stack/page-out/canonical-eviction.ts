@@ -6,7 +6,7 @@ import {
   archiveContent,
   buildRecoveryHint,
   readArchive,
-} from "../execution/archive-recovery/index.js";
+} from "../../execution/archive-recovery/index.js";
 
 type RegistryLike = {
   evictableTaskIds: string[];
