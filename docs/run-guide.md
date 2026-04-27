@@ -109,7 +109,7 @@ Useful trace query:
 
 ```bash
 rg 'stable_prefix_rewrite|proxy_before_call_rewrite|proxy_after_call_rewrite|tool_result_persist_applied' \
-  /mnt/20t/xubuqiang/.openclaw/ecoclaw-plugin-state/task-state/trace.jsonl
+  /mnt/20t/xubuqiang/.openclaw/tokenpilot-plugin-state/task-state/trace.jsonl
 ```
 
 ## Fast Failure Checks

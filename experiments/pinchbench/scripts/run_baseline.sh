@@ -35,7 +35,7 @@ MODEL_LIKE="${MODEL:-${TOKENPILOT_BASELINE_MODEL:-${BASELINE_MODEL:-gpt-5.4-mini
 JUDGE_LIKE="${JUDGE:-${TOKENPILOT_BASELINE_JUDGE:-${BASELINE_JUDGE:-gpt-5.4-mini}}}"
 apply_model_runtime_env "${MODEL_LIKE}"
 require_method_runtime_env
-apply_ecoclaw_env
+apply_runtime_env
 recover_stale_openclaw_config_backup
 
 if [[ -z "${PINCHBENCH_DATASET_DIR:-}" && -d "${PINCHBENCH_ROOT}/dataset" ]]; then

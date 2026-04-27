@@ -35,14 +35,14 @@ MODEL_LIKE="${MODEL:-${TOKENPILOT_MODEL:-${ECOCLAW_MODEL:-tokenpilot/gpt-5.4-min
 JUDGE_LIKE="${JUDGE:-${TOKENPILOT_JUDGE:-${ECOCLAW_JUDGE:-tokenpilot/gpt-5.4-mini}}}"
 apply_model_runtime_env "${MODEL_LIKE}"
 require_method_runtime_env
-apply_ecoclaw_env
+apply_runtime_env
 export ECOCLAW_FORCE_GATEWAY_RESTART="${TOKENPILOT_FORCE_GATEWAY_RESTART:-${ECOCLAW_FORCE_GATEWAY_RESTART:-true}}"
 recover_stale_openclaw_config_backup
-ensure_ecoclaw_plugin_config
-sanitize_ecoclaw_plugin_config
+ensure_plugin_runtime_config
+sanitize_plugin_runtime_config
 validate_openclaw_runtime_config
 ensure_openclaw_gateway_running
-sanitize_ecoclaw_plugin_config
+sanitize_plugin_runtime_config
 validate_openclaw_runtime_config
 
 if [[ -z "${PINCHBENCH_DATASET_DIR:-}" && -d "${PINCHBENCH_ROOT}/dataset" ]]; then
@@ -130,7 +130,7 @@ for raw in sys.stdin:
 import sys
 for raw in sys.stdin:
     line = raw.rstrip("\n")
-    if "ecoclaw" not in line.lower() and "plugin-runtime" not in line.lower():
+    if "tokenpilot" not in line.lower() and "plugin-runtime" not in line.lower():
         continue
     print("[gateway-log] " + line, flush=True)
 ' || true
@@ -167,7 +167,10 @@ fi
 RESULT_JSON="$(latest_json_in_dir "${OUTPUT_DIR}" || true)"
 if [[ -n "${RESULT_JSON}" ]]; then
   COST_REPORT_FILE="${REPORT_DIR}/method_${RUN_TAG}_cost.json"
-  REDUCTION_TRACE_FILE="${PLUGIN_STATE_DIR}/ecoclaw/reduction-pass-trace.jsonl"
+  REDUCTION_TRACE_FILE="${PLUGIN_STATE_DIR}/tokenpilot/reduction-pass-trace.jsonl"
+  if [[ ! -f "${REDUCTION_TRACE_FILE}" ]]; then
+    REDUCTION_TRACE_FILE="${PLUGIN_STATE_DIR}/ecoclaw/reduction-pass-trace.jsonl"
+  fi
   REDUCTION_REPORT_FILE="${REPORT_DIR}/method_${RUN_TAG}_reduction_passes.json"
   generate_cost_report_and_print_summary "${RESULT_JSON}" "${COST_REPORT_FILE}"
   generate_reduction_pass_report_and_print_summary "${REDUCTION_TRACE_FILE}" "${REDUCTION_REPORT_FILE}" "${RUN_START_ISO}"

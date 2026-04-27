@@ -147,7 +147,7 @@ resolve_model_alias() {
   esac
 }
 
-apply_ecoclaw_env() {
+apply_runtime_env() {
   if [[ -n "${ECOCLAW_API_KEY:-}" ]]; then
     export OPENAI_API_KEY="${ECOCLAW_API_KEY}"
     export OPENROUTER_API_KEY="${ECOCLAW_API_KEY}"
@@ -198,7 +198,7 @@ require_method_runtime_env() {
   fi
 }
 
-ensure_ecoclaw_plugin_config() {
+ensure_plugin_runtime_config() {
   local config_path="${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}"
   local proxy_base_url="${ECOCLAW_BASE_URL:-}"
   local proxy_api_key="${ECOCLAW_API_KEY:-}"
@@ -419,7 +419,7 @@ print(
 PATCH_PY
 }
 
-sanitize_ecoclaw_plugin_config() {
+sanitize_plugin_runtime_config() {
   local config_path="${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}"
   local enable_eviction="${ECOCLAW_ENABLE_EVICTION:-false}"
   if [[ ! -f "${config_path}" ]]; then
@@ -515,12 +515,12 @@ resolve_plugin_state_dir() {
     return 0
   fi
   local tokenpilot_state_dir="${HOME}/.openclaw/tokenpilot-plugin-state"
-  local legacy_state_dir="${HOME}/.openclaw/ecoclaw-plugin-state"
+  local fallback_state_dir="${HOME}/.openclaw/ecoclaw-plugin-state"
   if [[ -d "${tokenpilot_state_dir}" ]]; then
     printf '%s\n' "${tokenpilot_state_dir}"
     return 0
   fi
-  printf '%s\n' "${legacy_state_dir}"
+  printf '%s\n' "${fallback_state_dir}"
 }
 
 latest_json_in_dir() {

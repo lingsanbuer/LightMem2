@@ -1630,10 +1630,9 @@ def main():
 
     output_dir = args.output_dir
     if not output_dir:
-        # Default to <repo_root>/results/raw/pinchbench/ecoclaw
-        # skill_root is at: EcoClaw-Bench/experiments/dataset/pinchbench/
-        # So we go up 3 levels to reach EcoClaw-Bench, then into results/raw/pinchbench/ecoclaw
-        output_dir = str(skill_root.parent.parent.parent / "results" / "raw" / "pinchbench" / "ecoclaw")
+        # Default to <repo_root>/results/raw/pinchbench/tokenpilot
+        # skill_root is at: <repo_root>/experiments/pinchbench/dataset/
+        output_dir = str(skill_root.parent.parent.parent / "results" / "raw" / "pinchbench" / "tokenpilot")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
