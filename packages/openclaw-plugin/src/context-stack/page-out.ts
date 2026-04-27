@@ -7,7 +7,7 @@ export {
   saveCanonicalState,
   annotateCanonicalMessagesWithTaskAnchors,
   sortedRegistryTurnAnchors,
-} from "@ecoclaw/layer-history";
+} from "@tokenpilot/history";
 export * from "./page-out/canonical-rewrite.js";
 export * from "./page-out/canonical-eviction.js";
 export * from "../session/topology.js";

@@ -4,7 +4,7 @@ import {
   syncCanonicalStateFromTranscript,
   type EcoCanonicalState,
   type RewriteCanonicalStateParams,
-} from "@ecoclaw/layer-history";
+} from "@tokenpilot/history";
 import { applyCanonicalEviction } from "./canonical-eviction.js";
 
 export { syncCanonicalStateFromTranscript, type EcoCanonicalState };

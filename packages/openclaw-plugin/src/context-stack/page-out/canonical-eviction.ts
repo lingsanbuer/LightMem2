@@ -4,7 +4,7 @@ import {
   applyCanonicalEviction as applyCanonicalEvictionBase,
   computeClosureDeferredTaskInfo,
   type EvictionHelpers,
-} from "@ecoclaw/layer-history";
+} from "@tokenpilot/history";
 
 export { computeClosureDeferredTaskInfo, type EvictionHelpers };
 

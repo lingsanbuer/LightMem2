@@ -3,7 +3,7 @@ import {
   resolveReductionPasses as resolveLayerReductionPasses,
   runReductionBeforeCall as runLayerReductionBeforeCall,
   runReductionAfterCall as runLayerReductionAfterCall,
-} from "@ecoclaw/runtime-core";
+} from "@tokenpilot/runtime-core";
 import { createPolicyModule } from "../../layers/decision/src/policy.js";
 import {
   applyProxyReductionToInput,

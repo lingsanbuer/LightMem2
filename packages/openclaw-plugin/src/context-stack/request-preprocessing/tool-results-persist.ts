@@ -1,6 +1,6 @@
 import {
   planToolResultPersistence,
-} from "@ecoclaw/runtime-core";
+} from "@tokenpilot/runtime-core";
 
 type PersistHelpers = {
   appendTaskStateTrace: (stateDir: string, payload: Record<string, unknown>) => Promise<void>;

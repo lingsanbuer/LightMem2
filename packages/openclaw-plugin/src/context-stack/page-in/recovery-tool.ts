@@ -5,7 +5,7 @@ import {
   readArchive,
   resolveArchivePathFromLookup,
   resolveRecoveryStateDir,
-} from "@ecoclaw/runtime-core";
+} from "@tokenpilot/runtime-core";
 
 export function registerMemoryFaultRecoverTool(
   api: any,

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { runReductionAfterCall, resolveReductionPasses } from "@ecoclaw/runtime-core";
+import { runReductionAfterCall, resolveReductionPasses } from "@tokenpilot/runtime-core";
 import type { RuntimeTurnResult } from "../../../../kernel/src/types.js";
 
 export type AfterCallPassToggles = {

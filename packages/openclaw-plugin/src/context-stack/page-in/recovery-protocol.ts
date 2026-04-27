@@ -1,4 +1,4 @@
-import { MEMORY_FAULT_RECOVER_TOOL_NAME } from "@ecoclaw/runtime-core";
+import { MEMORY_FAULT_RECOVER_TOOL_NAME } from "@tokenpilot/runtime-core";
 
 const MEMORY_FAULT_PROTOCOL_INSTRUCTIONS = [
   "[EcoClaw Recovery Protocol]",
