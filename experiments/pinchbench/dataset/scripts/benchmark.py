@@ -363,6 +363,11 @@ def _parse_args() -> argparse.Namespace:
         help="Enable verbose logging (shows transcript contents, workspace files, etc.)",
     )
     parser.add_argument(
+        "--generate-only",
+        action="store_true",
+        help="Generate transcripts/results only and skip all grading.",
+    )
+    parser.add_argument(
         "--max-llm-calls-per-task",
         type=int,
         default=int(os.environ.get("PINCHBENCH_MAX_LLM_CALLS_PER_TASK", "60")),
@@ -912,6 +917,7 @@ def _run_task_job(
     max_llm_calls_per_task: int = 0,
     max_tool_calls_per_task: int = 0,
     defer_continuous_grading: bool = False,
+    generate_only: bool = False,
 ) -> Dict[str, Any]:
     logger.info("\n%s", "=" * 80)
     logger.info(
@@ -984,7 +990,21 @@ def _run_task_job(
         result["llm_models"] = sorted(
             {str(call.get("model")) for call in result["llm_calls"] if call.get("model")}
         )
-    if defer_continuous_grading and session_mode == "continuous":
+    if generate_only:
+        grade = GradeResult(
+            task_id=task.task_id,
+            score=0.0,
+            max_score=1.0,
+            grading_type=task.grading_type,
+            breakdown={},
+            notes="Generate-only phase; grading deferred",
+        )
+        call_counts = {
+            "llm_calls": len(result.get("llm_calls", [])),
+            "tool_calls": _count_tool_calls_from_transcript(result.get("transcript", [])),
+            "guard_triggered": False,
+        }
+    elif defer_continuous_grading and session_mode == "continuous":
         workspace_path = result.get("workspace", "")
         if workspace_path:
             source_workspace = Path(workspace_path)
@@ -1022,7 +1042,9 @@ def _run_task_job(
             max_tool_calls_per_task=max_tool_calls_per_task,
         )
 
-    if defer_continuous_grading and session_mode == "continuous":
+    if generate_only:
+        logger.info("⏳ Task %s generated; grading skipped", task.task_id)
+    elif defer_continuous_grading and session_mode == "continuous":
         logger.info("⏳ Task %s deferred for final grading", task.task_id)
     else:
         score_pct = grade.score / grade.max_score * 100 if grade.max_score > 0 else 0
@@ -1051,7 +1073,9 @@ def _run_task_job(
             "start": transcript_slice_start,
             "end": transcript_end_index,
             "length": max(0, transcript_end_index - transcript_slice_start),
-            "deferred": bool(defer_continuous_grading and session_mode == "continuous"),
+            "deferred": bool(
+                generate_only or (defer_continuous_grading and session_mode == "continuous")
+            ),
         },
         "call_counts": call_counts,
         "result": result,
@@ -1423,12 +1447,15 @@ def main():
     completed_jobs_lock = threading.Lock()
     progress_grader_thread: Optional[threading.Thread] = None
     progress_grader_stop_event: Optional[threading.Event] = None
+    generate_only = args.generate_only or (
+        os.environ.get("PINCHBENCH_GENERATE_ONLY", "").strip().lower() == "true"
+    )
     if parallel_jobs == 1:
         transcript_cursor_by_agent: Dict[str, int] = {}
         continuous_agent_id: Optional[str] = None
         continuous_agent_workspace: Optional[Path] = None
         continuous_session_id: Optional[str] = None
-        defer_continuous_grading = session_mode == "continuous"
+        defer_continuous_grading = session_mode == "continuous" and not generate_only
         if session_mode == "continuous":
             continuous_agent_id = f"bench-{model_slug}-{run_id}-serial"
             continuous_agent_workspace = Path(f"/tmp/pinchbench/{run_id}/agent_workspace_serial")
@@ -1493,6 +1520,7 @@ def main():
                     max_llm_calls_per_task=args.max_llm_calls_per_task,
                     max_tool_calls_per_task=args.max_tool_calls_per_task,
                     defer_continuous_grading=defer_continuous_grading,
+                    generate_only=generate_only,
                 )
             with completed_jobs_lock:
                 completed_jobs.append(completed_job)
@@ -1533,6 +1561,7 @@ def main():
                     session_mode=session_mode,
                     max_llm_calls_per_task=args.max_llm_calls_per_task,
                     max_tool_calls_per_task=args.max_tool_calls_per_task,
+                    generate_only=generate_only,
                 ): job
                 for job in jobs
             }
@@ -1594,7 +1623,13 @@ def main():
 
     completed_jobs.sort(key=lambda item: (int(item["task_index"]), int(item["run_index"])))
 
-    if parallel_jobs == 1 and session_mode == "continuous" and continuous_agent_id:
+    if (
+        parallel_jobs == 1
+        and session_mode == "continuous"
+        and continuous_agent_id
+        and defer_continuous_grading
+        and not generate_only
+    ):
         _finalize_continuous_jobs(
             completed_jobs=completed_jobs,
             tasks_by_id=tasks_by_id,
@@ -1674,6 +1709,7 @@ def main():
         "session_mode": session_mode,
         "max_llm_calls_per_task": args.max_llm_calls_per_task,
         "max_tool_calls_per_task": args.max_tool_calls_per_task,
+        "phase": "generate" if generate_only else "full",
         "tasks": task_entries,
         "efficiency": efficiency,
     }

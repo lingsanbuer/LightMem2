@@ -6,26 +6,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib import error, request
 
-from lib_agent import (
-    OPENCLAW_CONFIG_PATH,
-    _openclaw_agent_lock,
-    ensure_agent_exists,
-    run_openclaw_prompt,
-    slugify_model,
-)
 from lib_tasks import Task
 
 
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_JUDGE_MODEL = "tuzi/gpt-5.4"
+DEFAULT_JUDGE_MODEL = "tokenpilot/gpt-5.4-mini"
 DEFAULT_JUDGE_AGENT_PREFIX = "bench-judge"
 DEFAULT_JUDGE_TIMEOUT_SECONDS = 180
 
@@ -64,7 +58,7 @@ def grade_task(
     if verbose:
         logger.info("   [VERBOSE] Grading task %s with type: %s", task.task_id, grading_type)
         logger.info("   [VERBOSE] Execution status: %s", execution_result.get("status", "unknown"))
-    
+
     if grading_type == "automated":
         result = _grade_automated(task, execution_result, verbose=verbose)
         if verbose:
@@ -129,7 +123,7 @@ def _grade_automated(task: Task, execution_result: Dict[str, Any], verbose: bool
     )
     if not isinstance(scores, dict):
         scores = {}
-    
+
     if verbose:
         logger.info("   [VERBOSE] Automated grading scores: %s", scores)
 
@@ -154,79 +148,89 @@ def _grade_llm_judge(
     skill_dir: Path,
     verbose: bool = False,
 ) -> GradeResult:
+    del judge_agent_prefix, skill_dir
     transcript = execution_result.get("transcript", [])
+    execution_status = execution_result.get("status", "unknown")
+
+    if not transcript and execution_status != "success":
+        if verbose:
+            logger.info(
+                "   [VERBOSE] Skipping LLM judge: status=%s, transcript empty",
+                execution_status,
+            )
+        return GradeResult(
+            task_id=task.task_id,
+            score=0.0,
+            max_score=1.0,
+            grading_type="llm_judge",
+            breakdown={},
+            notes=f"Skipped: task execution failed ({execution_status}), no transcript to evaluate",
+        )
+
     transcript_summary = _summarize_transcript(transcript)
     if verbose:
-        logger.info("   [VERBOSE] Transcript summary for judge (first 1000 chars):\n%s", transcript_summary[:1000])
+        logger.info(
+            "   [VERBOSE] Transcript summary for judge (first 1000 chars):\n%s",
+            transcript_summary[:1000],
+        )
+    workspace_content = _read_workspace_files(execution_result.get("workspace", ""))
+    if verbose and workspace_content:
+        logger.info(
+            "   [VERBOSE] Workspace files passed to judge (first 500 chars):\n%s",
+            workspace_content[:500],
+        )
     rubric = task.llm_judge_rubric or _format_grading_criteria(task)
-    prompt = _build_judge_prompt(task, transcript_summary, rubric)
+    prompt = _build_judge_prompt(task, transcript_summary, rubric, workspace_content)
 
-    agent_id = _ensure_judge_agent(judge_agent_prefix, judge_model, skill_dir)
-    judge_workspace = Path(f"/tmp/pinchbench/judge/{task.task_id}")
-    judge_result = run_openclaw_prompt(
-        agent_id=agent_id,
-        prompt=prompt,
-        workspace=judge_workspace,
-        timeout_seconds=judge_timeout_seconds,
-    )
+    max_judge_attempts = 3
+    raw_parsed: Dict[str, Any] = {}
+    parsed: Dict[str, Any] = {}
+    last_error = ""
 
-    raw_parsed = _parse_judge_response(judge_result.get("transcript", []))
-
-    # Retry up to 2 times when judge returns empty/unparseable response.
-    if not raw_parsed:
-        for retry_i in range(1, 3):
+    for attempt in range(max_judge_attempts):
+        judge_result = call_judge_api(
+            prompt=prompt if attempt == 0 else _build_judge_retry_prompt(task, transcript_summary, rubric, workspace_content),
+            model=judge_model,
+            timeout_seconds=judge_timeout_seconds,
+        )
+        if verbose:
+            logger.info("   [VERBOSE] Judge execution status: %s", judge_result.get("status"))
+            if judge_result.get("error"):
+                logger.info("   [VERBOSE] Judge error: %s", judge_result.get("error"))
+        if judge_result.get("status") != "success":
+            last_error = str(judge_result.get("error") or judge_result.get("status") or "judge_error")
             logger.warning(
-                "Judge returned empty response for %s (attempt %d); retrying.",
-                task.task_id, retry_i,
+                "Judge API call failed (attempt %d/%d): %s",
+                attempt + 1,
+                max_judge_attempts,
+                last_error,
             )
-            retry_prompt = _build_judge_retry_prompt(task, transcript_summary, rubric)
-            retry_result = run_openclaw_prompt(
-                agent_id=agent_id,
-                prompt=retry_prompt,
-                workspace=judge_workspace,
-                timeout_seconds=judge_timeout_seconds,
-            )
-            retry_parsed = _parse_judge_response(retry_result.get("transcript", []))
-            if retry_parsed:
-                raw_parsed = retry_parsed
-                judge_result = retry_result
-                break
+            continue
 
-    if verbose:
-        logger.info("   [VERBOSE] Judge raw response parsed: %s", raw_parsed)
-    
-    # Normalize the response to handle various formats (criteria_scores, score, justification, etc.)
-    parsed = _normalize_judge_response(raw_parsed)
+        raw_parsed = _parse_judge_text(judge_result.get("text", ""))
+        if verbose:
+            logger.info("   [VERBOSE] Judge raw response parsed: %s", raw_parsed)
+        parsed = _normalize_judge_response(raw_parsed)
+        if verbose:
+            logger.info("   [VERBOSE] Normalized judge response: %s", parsed)
+        if parsed.get("scores") or parsed.get("total") is not None:
+            break
+        logger.warning(
+            "Judge returned no parseable scores for %s (attempt %d/%d)",
+            task.task_id,
+            attempt + 1,
+            max_judge_attempts,
+        )
 
-    # Retry when normalization yields empty breakdown (judge returned text but no valid JSON scores).
-    if not parsed.get("scores") and parsed.get("total") is None:
-        for retry_i in range(1, 3):
-            logger.warning(
-                "Judge returned no scores for %s after normalization (attempt %d); retrying.",
-                task.task_id, retry_i,
-            )
-            retry_prompt = _build_judge_retry_prompt(task, transcript_summary, rubric)
-            retry_result = run_openclaw_prompt(
-                agent_id=agent_id,
-                prompt=retry_prompt,
-                workspace=judge_workspace,
-                timeout_seconds=judge_timeout_seconds,
-            )
-            retry_parsed = _parse_judge_response(retry_result.get("transcript", []))
-            if retry_parsed:
-                parsed = _normalize_judge_response(retry_parsed)
-                if parsed.get("scores") or parsed.get("total") is not None:
-                    break
-
-    if verbose:
-        logger.info("   [VERBOSE] Normalized judge response: %s", parsed)
-    
     breakdown = parsed.get("scores", {})
     total = parsed.get("total")
     notes = parsed.get("notes", "")
+    if total is None:
+        notes = str(notes or last_error or "LLM judge failed: no parseable response")
+        total = 0.0
     return GradeResult(
         task_id=task.task_id,
-        score=float(total) if total is not None else 0.0,
+        score=float(total),
         max_score=1.0,
         grading_type="llm_judge",
         breakdown=_normalize_score_dict(breakdown),
@@ -321,14 +325,51 @@ def _summarize_transcript(transcript: List[Dict[str, Any]]) -> str:
     return "\n".join(summary_parts)
 
 
-def _build_judge_prompt(task: Task, transcript_summary: str, rubric: str) -> str:
+def _read_workspace_files(workspace_path: str) -> str:
+    if not workspace_path:
+        return ""
+    workspace = Path(workspace_path)
+    if not workspace.exists():
+        return ""
+    skip_names = {
+        "BOOTSTRAP.md",
+        "SOUL.md",
+        "USER.md",
+        "IDENTITY.md",
+        "HEARTBEAT.md",
+        "TOOLS.md",
+        "AGENTS.md",
+    }
+    skip_dirs = {".git", ".openclaw", "__pycache__", "node_modules", "skills"}
+    file_contents: List[str] = []
+    for file_path in sorted(workspace.rglob("*")):
+        if not file_path.is_file():
+            continue
+        rel = file_path.relative_to(workspace)
+        parts = rel.parts
+        if any(part.startswith(".") or part in skip_dirs for part in parts):
+            continue
+        if file_path.name in skip_names:
+            continue
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            file_contents.append(f"### File: {rel}\n{content[:3000]}")
+        except (OSError, UnicodeDecodeError):
+            pass
+    return "\n\n".join(file_contents)
+
+
+def _build_judge_prompt(
+    task: Task, transcript_summary: str, rubric: str, workspace_content: str = ""
+) -> str:
+    workspace_section = ""
+    if workspace_content.strip():
+        workspace_section = f"## Workspace Files Created by Agent\n{workspace_content}\n\n"
     return (
         "You are a grading function. Your ONLY job is to output a single JSON object.\n\n"
         "CRITICAL RULES:\n"
-        "- Do NOT use any tools (no sessions_spawn, Read, Write, exec, process, or any other tool calls)\n"
-        "- Do NOT create files, run commands, or spawn sub-agents\n"
-        "- Do NOT try to complete, replicate, or re-execute the task yourself\n"
-        "- The transcript below is a READ-ONLY record for you to EVALUATE — not a task for you to perform\n"
+        "- Do NOT use any tools\n"
+        "- Do NOT create files or run commands\n"
         "- Do NOT write any prose, explanation, or commentary outside the JSON\n"
         "- Respond with ONLY a JSON object — nothing else\n\n"
         "Be a strict evaluator. Reserve 1.0 for genuinely excellent performance. "
@@ -340,99 +381,319 @@ def _build_judge_prompt(task: Task, transcript_summary: str, rubric: str) -> str
         f"{task.expected_behavior}\n\n"
         "## Agent Transcript (summarized)\n"
         f"{transcript_summary}\n\n"
+        f"{workspace_section}"
         "## Grading Rubric\n"
         f"{rubric}\n\n"
-        "Score each criterion from 0.0 to 1.0.\n\n"
+        "Score each criterion from 0.0 to 1.0.\n"
+        'The "total" field must also be between 0.0 and 1.0, and it must be the arithmetic mean of the criterion scores, not their sum.\n\n'
         "Respond with ONLY this JSON structure (no markdown, no code fences, no extra text):\n"
         '{"scores": {"criterion_name": 0.0}, "total": 0.0, "notes": "brief justification"}'
     )
 
 
-def _build_judge_retry_prompt(task: Task, transcript_summary: str, rubric: str) -> str:
+def _build_judge_retry_prompt(
+    task: Task, transcript_summary: str, rubric: str, workspace_content: str = ""
+) -> str:
     return (
-        _build_judge_prompt(task, transcript_summary, rubric)
+        _build_judge_prompt(task, transcript_summary, rubric, workspace_content)
         + "\n\nIMPORTANT: Your previous response was invalid for parsing. "
-        + "Reply again with one JSON object only. No markdown, no surrounding text, no code fences, no tool calls."
+        + "Reply again with one JSON object only. No markdown, no surrounding text, no code fences."
     )
 
 
-def _ensure_judge_agent(judge_agent_prefix: str, judge_model: str, skill_dir: Path) -> str:
-    model_slug = slugify_model(judge_model)
-    agent_id = f"{judge_agent_prefix}-{model_slug}"
-    workspace = Path("/tmp/pinchbench/judge/workspace")
-    ensure_agent_exists(agent_id, judge_model, workspace)
-    _restrict_judge_tools(agent_id)
-    return agent_id
+_JUDGE_SYSTEM_MSG = (
+    "You are a strict grading function. "
+    "Respond with ONLY a JSON object, no prose, no markdown fences, no extra text."
+)
 
 
-def _restrict_judge_tools(agent_id: str) -> None:
-    """Deny interactive tools for judge agents to prevent role confusion.
+def call_judge_api(*, prompt: str, model: str, timeout_seconds: float = 120.0) -> Dict[str, Any]:
+    model = (model or "").strip()
+    if model.startswith("anthropic/"):
+        return _judge_via_anthropic(prompt, model, timeout_seconds)
+    if model.startswith("openai/"):
+        return _judge_via_openai(prompt, model, timeout_seconds)
+    if model.startswith("openrouter/"):
+        return _judge_via_openrouter(prompt, model, timeout_seconds)
+    return _judge_via_runtime_compat(prompt, model, timeout_seconds)
 
-    Judge agents should only produce text output — never spawn sessions,
-    run commands, or read/write files.
-    """
-    with _openclaw_agent_lock():
+
+def _normalize_model_name_for_env(model_like: str) -> str:
+    value = (model_like or "").strip()
+    if value.startswith("tokenpilot/"):
+        value = value.split("/", 1)[1]
+    if "/" in value:
+        value = value.split("/", 1)[1]
+    if "gpt-5-4-mini" in value:
+        value = value.replace("gpt-5-4-mini", "gpt-5.4-mini")
+    return value
+
+
+def _model_env_key(model_like: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "_", _normalize_model_name_for_env(model_like).upper())
+
+
+def _judge_via_openai_compat(
+    prompt: str,
+    api_model: str,
+    endpoint: str,
+    api_key: str,
+    timeout_seconds: float,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    payload = json.dumps(
+        {
+            "model": api_model,
+            "messages": [
+                {"role": "system", "content": _JUDGE_SYSTEM_MSG},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.0,
+            "max_completion_tokens": 2048,
+        }
+    ).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    req = request.Request(endpoint, data=payload, headers=headers, method="POST")
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        body = ""
         try:
-            cfg = json.loads(OPENCLAW_CONFIG_PATH.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
-            return
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        logger.error("Judge API error (%s): %s", exc.code, body)
+        return {"status": "error", "text": "", "error": f"HTTP {exc.code}: {body}"}
+    except error.URLError as exc:
+        logger.error("Judge network error: %s", exc)
+        return {"status": "error", "text": "", "error": str(exc)}
+    except TimeoutError:
+        return {"status": "timeout", "text": "", "error": "Request timed out"}
 
-        agents_list = cfg.get("agents", {}).get("list", [])
-        for entry in agents_list:
-            if entry.get("id") == agent_id:
-                entry["tools"] = {
-                    "deny": [
-                        "sessions_spawn", "sessions_history", "sessions_list",
-                        "exec", "process", "write", "browser",
-                    ]
-                }
-                entry.pop("skills", None)
-                break
-        else:
-            return
-
-        OPENCLAW_CONFIG_PATH.write_text(
-            json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        validate_result = subprocess.run(
-            ["openclaw", "config", "validate"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if validate_result.returncode != 0:
-            logger.warning(
-                "Judge config validate failed for %s after sanitize: stdout=%s stderr=%s",
-                agent_id,
-                validate_result.stdout.strip(),
-                validate_result.stderr.strip(),
-            )
-            raise RuntimeError(
-                f"judge config invalid after sanitize for {agent_id}: "
-                f"{validate_result.stdout.strip()} {validate_result.stderr.strip()}".strip()
-            )
-        else:
-            logger.info("Judge config validate passed for %s", agent_id)
-        logger.info("Restricted tools for judge agent %s", agent_id)
+    choices = data.get("choices", [])
+    if not choices:
+        return {"status": "error", "text": "", "error": "No choices in response"}
+    text = choices[0].get("message", {}).get("content", "")
+    return {"status": "success", "text": text}
 
 
-def _parse_judge_response(transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
-    content_chunks: List[str] = []
-    for event in transcript:
-        if event.get("type") != "message":
-            continue
-        msg = event.get("message", {})
-        if msg.get("role") != "assistant":
-            continue
-        for item in msg.get("content", []):
-            if item.get("type") == "text":
-                content_chunks.append(item.get("text", ""))
-    raw_text = "\n".join(content_chunks).strip()
+def _judge_via_runtime_compat(prompt: str, model: str, timeout_seconds: float) -> Dict[str, Any]:
+    model_key = _model_env_key(model)
+    base_url = (
+        os.environ.get(f"PINCHBENCH_MODEL_{model_key}_BASE_URL")
+        or os.environ.get("TOKENPILOT_BASE_URL")
+        or os.environ.get("ECOCLAW_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
+    )
+    api_key = (
+        os.environ.get(f"PINCHBENCH_MODEL_{model_key}_API_KEY")
+        or os.environ.get("TOKENPILOT_API_KEY")
+        or os.environ.get("ECOCLAW_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+    )
+    if not base_url or not api_key:
+        return {"status": "error", "text": "", "error": "runtime compat judge credentials not set"}
+    bare_model = model.split("/", 1)[1] if "/" in model else model
+    endpoint = base_url.rstrip("/") + "/chat/completions"
+    return _judge_via_openai_compat(prompt, bare_model, endpoint, api_key, timeout_seconds)
+
+
+def _judge_via_openrouter(prompt: str, model: str, timeout_seconds: float) -> Dict[str, Any]:
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        return {"status": "error", "text": "", "error": "OPENROUTER_API_KEY not set"}
+    bare_model = model.removeprefix("openrouter/")
+    return _judge_via_openai_compat(
+        prompt,
+        bare_model,
+        "https://openrouter.ai/api/v1/chat/completions",
+        api_key,
+        timeout_seconds,
+        extra_headers={"HTTP-Referer": "https://pinchbench.com", "X-Title": "PinchBench-Judge"},
+    )
+
+
+def _judge_via_openai(prompt: str, model: str, timeout_seconds: float) -> Dict[str, Any]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {"status": "error", "text": "", "error": "OPENAI_API_KEY not set"}
+    bare_model = model.removeprefix("openai/")
+    return _judge_via_openai_compat(
+        prompt,
+        bare_model,
+        "https://api.openai.com/v1/chat/completions",
+        api_key,
+        timeout_seconds,
+    )
+
+
+def _judge_via_anthropic(prompt: str, model: str, timeout_seconds: float) -> Dict[str, Any]:
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"status": "error", "text": "", "error": "ANTHROPIC_API_KEY not set"}
+    payload = json.dumps(
+        {
+            "model": model.removeprefix("anthropic/"),
+            "max_tokens": 2048,
+            "temperature": 0.0,
+            "system": _JUDGE_SYSTEM_MSG,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+    ).encode("utf-8")
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    req = request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        logger.error("Anthropic judge API error (%s): %s", exc.code, body)
+        return {"status": "error", "text": "", "error": f"HTTP {exc.code}: {body}"}
+    except error.URLError as exc:
+        logger.error("Anthropic judge network error: %s", exc)
+        return {"status": "error", "text": "", "error": str(exc)}
+    except TimeoutError:
+        return {"status": "timeout", "text": "", "error": "Request timed out"}
+
+    content = data.get("content", [])
+    text_parts = [item.get("text", "") for item in content if item.get("type") == "text"]
+    return {"status": "success", "text": "\n".join(text_parts)}
+
+
+def _looks_like_judge_payload(parsed: Dict[str, Any]) -> bool:
+    if not isinstance(parsed, dict) or not parsed:
+        return False
+    judge_keys = {
+        "scores",
+        "criteria_scores",
+        "criterion_scores",
+        "total",
+        "score",
+        "overall_score",
+        "total_score",
+        "completionScore",
+        "notes",
+        "justification",
+        "reasoning",
+        "overall",
+    }
+    return any(key in parsed for key in judge_keys)
+
+
+def _coerce_score_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    if isinstance(value, dict):
+        for key in ("score", "value", "weighted_score"):
+            if key in value:
+                return _coerce_score_value(value[key])
+    return None
+
+
+def _extract_named_scores(parsed: Dict[str, Any]) -> Dict[str, float]:
+    scores: Dict[str, float] = {}
+
+    if "scores" in parsed and isinstance(parsed["scores"], dict):
+        for key, value in parsed["scores"].items():
+            coerced = _coerce_score_value(value)
+            if coerced is not None:
+                scores[str(key)] = coerced
+
+    if "criteria_scores" in parsed:
+        criteria = parsed["criteria_scores"]
+        if isinstance(criteria, dict):
+            for key, value in criteria.items():
+                coerced = _coerce_score_value(value)
+                if coerced is not None:
+                    scores[str(key)] = coerced
+
+    if "criterion_scores" in parsed:
+        criteria = parsed["criterion_scores"]
+        if isinstance(criteria, dict):
+            for key, value in criteria.items():
+                coerced = _coerce_score_value(value)
+                if coerced is not None:
+                    scores[str(key)] = coerced
+        elif isinstance(criteria, list):
+            for idx, item in enumerate(criteria, start=1):
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("criterion") or item.get("label") or f"criterion_{idx}"
+                    coerced = _coerce_score_value(item)
+                else:
+                    name = f"criterion_{idx}"
+                    coerced = _coerce_score_value(item)
+                if coerced is not None:
+                    scores[str(name)] = coerced
+
+    for key, value in parsed.items():
+        if re.fullmatch(r"criterion\d+", str(key), re.IGNORECASE):
+            coerced = _coerce_score_value(value)
+            if coerced is not None:
+                scores[str(key)] = coerced
+
+    return scores
+
+
+def _extract_total_score(parsed: Dict[str, Any], scores: Dict[str, float]) -> float | None:
+    for key in ("total", "score", "overall_score", "completionScore", "total_score"):
+        if key in parsed:
+            coerced = _coerce_score_value(parsed[key])
+            if coerced is not None:
+                return coerced
+
+    overall = parsed.get("overall")
+    if isinstance(overall, dict):
+        coerced = _coerce_score_value(overall)
+        if coerced is not None:
+            return coerced
+
+    if scores:
+        values = [v for v in scores.values() if isinstance(v, (int, float))]
+        if values:
+            return sum(values) / len(values)
+
+    return None
+
+
+def _parse_judge_text(raw_text: str) -> Dict[str, Any]:
+    raw_text = raw_text.strip()
     if not raw_text:
         return {}
 
-    # First, try to extract JSON from code blocks (```json ... ```)
-    code_block_match = re.search(r"```json\s*(.*?)\s*```", raw_text, re.DOTALL)
+    try:
+        parsed = json.loads(raw_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    code_block_match = re.search(r"```(?:json)?\s*(.*?)\s*```", raw_text, re.DOTALL)
     if code_block_match:
         try:
             parsed = json.loads(code_block_match.group(1))
@@ -441,53 +702,29 @@ def _parse_judge_response(transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    # Find all potential JSON objects by looking for balanced braces
-    # We'll extract chunks that start with { and try to parse them
     json_candidates: List[str] = []
     brace_depth = 0
-    current_json = []
+    current_json: List[str] = []
     for char in raw_text:
         if char == "{":
             if brace_depth == 0:
                 current_json = []
             brace_depth += 1
-
         if brace_depth > 0:
             current_json.append(char)
-
         if char == "}":
             brace_depth -= 1
             if brace_depth == 0 and current_json:
                 json_candidates.append("".join(current_json))
 
-    # Try parsing from the last JSON object backwards (most recent response)
     for candidate in reversed(json_candidates):
         try:
             parsed = json.loads(candidate)
-            if isinstance(parsed, dict) and "scores" in parsed:
-                # Prefer JSON that has the expected structure
+            if isinstance(parsed, dict) and _looks_like_judge_payload(parsed):
                 return parsed
         except json.JSONDecodeError:
             continue
 
-    # Try any valid JSON dict
-    for candidate in reversed(json_candidates):
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            continue
-
-    scorecard = _extract_scorecard_from_text(raw_text)
-    if scorecard:
-        logger.warning(
-            "Fell back to free-text score extraction from judge response"
-        )
-        return scorecard
-
-    # Fallback: try to extract numeric scores from prose responses.
-    # Models sometimes return only "Total: 0.72" or "Overall score: 0.65".
     score_pattern = re.search(
         r"(?:total|overall|final)\s*(?:score)?[:\s]*(0\.\d+|1\.0+)",
         raw_text,
@@ -497,196 +734,24 @@ def _parse_judge_response(transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
             total = float(score_pattern.group(1))
             if 0.0 <= total <= 1.0:
-                logger.warning(
-                    "Fell back to regex score extraction from prose (total=%.2f)", total
-                )
-                return {"scores": {}, "total": total, "notes": "Score extracted from prose (JSON parse failed)"}
+                logger.warning("Fell back to regex score extraction (total=%.2f)", total)
+                return {"scores": {}, "total": total, "notes": "Score extracted from prose"}
         except ValueError:
             pass
 
-    logger.warning("Failed to parse judge JSON response")
+    logger.warning("Failed to parse judge text response. Raw text (first 500 chars): %s", raw_text[:500])
     return {}
 
 
-def _extract_scorecard_from_text(raw_text: str) -> Dict[str, Any]:
-    cleaned = raw_text.replace("```json", "").replace("```", "").strip()
-    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
-    if not lines:
-        return {}
-
-    total: Optional[float] = None
-    scores: Dict[str, float] = {}
-    notes_lines: List[str] = []
-    pending_label: Optional[str] = None
-
-    total_re = re.compile(
-        r"(?:^|\b)(?:total|overall|final)\s*(?:score)?\s*[:=\-]?\s*(0(?:\.\d+)?|1(?:\.0+)?)\b",
-        re.IGNORECASE,
-    )
-    inline_score_re = re.compile(
-        r"^(?:[-*]|\d+[.)])?\s*(?P<label>.+?)\s*[:=\-–]\s*(?P<score>0(?:\.\d+)?|1(?:\.0+)?)\s*$",
-        re.IGNORECASE,
-    )
-    criterion_header_re = re.compile(
-        r"^(?P<label>(?:criterion\s*\d+[:\-]?\s*)?.{3,120})$",
-        re.IGNORECASE,
-    )
-    score_only_re = re.compile(
-        r"^(?:\*\*)?score(?:\*\*)?\s*[:=\-]?\s*(0(?:\.\d+)?|1(?:\.0+)?)\s*$",
-        re.IGNORECASE,
-    )
-
-    def _normalize_label(label: str) -> str:
-        normalized = re.sub(r"^[-*\d.)\s]+", "", label).strip(" :-\t")
-        normalized = re.sub(r"\s+", " ", normalized)
-        return normalized
-
-    def _looks_like_total_label(label: str) -> bool:
-        folded = label.lower()
-        return any(token in folded for token in ("total", "overall", "final score", "weighted score"))
-
-    def _is_generic_score_label(label: str) -> bool:
-        folded = label.lower().strip()
-        return folded in {
-            "score",
-            "scores",
-            "criterion",
-            "final",
-            "overall",
-            "total",
-            "feedback",
-            "notes",
-            "justification",
-            "reasoning",
-            "explanation",
-        }
-
-    for line in lines:
-        if line == "NO_REPLY":
-            continue
-
-        total_match = total_re.search(line)
-        if total_match:
-            try:
-                total = float(total_match.group(1))
-            except ValueError:
-                pass
-
-        score_only_match = score_only_re.match(line)
-        if score_only_match and pending_label:
-            try:
-                scores[pending_label] = float(score_only_match.group(1))
-                pending_label = None
-                continue
-            except ValueError:
-                pass
-
-        inline_match = inline_score_re.match(line)
-        if inline_match:
-            label = _normalize_label(inline_match.group("label"))
-            if label and not _looks_like_total_label(label) and not _is_generic_score_label(label):
-                try:
-                    scores[label] = float(inline_match.group("score"))
-                    pending_label = None
-                    continue
-                except ValueError:
-                    pass
-
-        header_match = criterion_header_re.match(line)
-        if header_match:
-            candidate = _normalize_label(header_match.group("label"))
-            if candidate and not _looks_like_total_label(candidate) and not _is_generic_score_label(candidate):
-                pending_label = candidate
-
-        notes_lines.append(line)
-
-    if total is None and scores:
-        values = [value for value in scores.values() if isinstance(value, (int, float))]
-        if values:
-            total = sum(values) / len(values)
-
-    if total is None and not scores:
-        return {}
-
-    notes = " ".join(notes_lines)
-    notes = re.sub(r"\s+", " ", notes).strip()
-    if len(notes) > 600:
-        notes = notes[:597] + "..."
-
-    return {
-        "scores": scores,
-        "total": total,
-        "notes": notes or "Score extracted from free-text judge response",
-    }
-
-
 def _normalize_judge_response(parsed: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normalize judge response to expected format with 'scores', 'total', and 'notes'.
-    
-    Handles various response formats:
-    - {"scores": {...}, "total": 0.9, "notes": "..."}  (expected)
-    - {"criteria_scores": {...}, ...}  (Claude sometimes uses this)
-    - {"score": 0.9, "justification": "..."}  (simplified format)
-    """
     result: Dict[str, Any] = {"scores": {}, "total": None, "notes": ""}
-    
-    # Extract scores from various keys
-    if "scores" in parsed:
-        scores_data = parsed["scores"]
-        if isinstance(scores_data, dict):
-            # Handle nested structure: {"criterion": {"score": 0.9, "weight": 0.3}}
-            for key, value in scores_data.items():
-                if isinstance(value, dict) and "score" in value:
-                    try:
-                        result["scores"][key] = float(value["score"])
-                    except (TypeError, ValueError):
-                        pass
-                elif isinstance(value, (int, float, str)):
-                    try:
-                        result["scores"][key] = float(value)
-                    except (TypeError, ValueError):
-                        pass
-    elif "criteria_scores" in parsed:
-        # Handle Claude's alternate format
-        criteria = parsed["criteria_scores"]
-        if isinstance(criteria, dict):
-            for key, value in criteria.items():
-                if isinstance(value, dict) and "score" in value:
-                    result["scores"][key] = value["score"]
-                elif isinstance(value, (int, float)):
-                    result["scores"][key] = value
-    
-    # Extract total score
-    if "total" in parsed and parsed["total"] is not None:
-        try:
-            result["total"] = float(parsed["total"])
-        except (TypeError, ValueError):
-            result["total"] = None
-    elif "score" in parsed and isinstance(parsed["score"], (int, float, str)):
-        try:
-            result["total"] = float(parsed["score"])
-        except (TypeError, ValueError):
-            result["total"] = None
-    elif "overall_score" in parsed and isinstance(parsed["overall_score"], (int, float, str)):
-        try:
-            result["total"] = float(parsed["overall_score"])
-        except (TypeError, ValueError):
-            result["total"] = None
-    elif result["scores"]:
-        # Calculate average if we have individual scores but no total
-        values = [v for v in result["scores"].values() if isinstance(v, (int, float))]
-        if values:
-            result["total"] = sum(values) / len(values)
+    result["scores"] = _extract_named_scores(parsed)
+    result["total"] = _extract_total_score(parsed, result["scores"])
 
-    # Guard: if the judge returned a sum instead of an average, recalculate.
-    # Individual criterion scores are 0.0-1.0, so a valid total must be <= 1.0.
-    if result["total"] is not None and result["total"] > 1.0 and result["scores"]:
-        values = [v for v in result["scores"].values() if isinstance(v, (int, float))]
-        if values:
-            result["total"] = sum(values) / len(values)
+    values = [v for v in result["scores"].values() if isinstance(v, (int, float))]
+    if values and result["total"] is not None and result["total"] > 1.0 and all(0.0 <= float(v) <= 1.0 for v in values):
+        result["total"] = sum(values) / len(values)
 
-    # Extract notes/justification
     if "notes" in parsed:
         result["notes"] = str(parsed["notes"])
     elif "feedback" in parsed:
@@ -697,5 +762,5 @@ def _normalize_judge_response(parsed: Dict[str, Any]) -> Dict[str, Any]:
         result["notes"] = str(parsed["reasoning"])
     elif "explanation" in parsed:
         result["notes"] = str(parsed["explanation"])
-    
+
     return result

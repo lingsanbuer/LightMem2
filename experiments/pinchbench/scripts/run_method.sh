@@ -13,6 +13,9 @@ RUNS=""
 TIMEOUT_MULTIPLIER=""
 PARALLEL=""
 SESSION_MODE=""
+PHASE="full"
+INPUT_JSON=""
+OUTPUT_DIR_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,6 +26,9 @@ while [[ $# -gt 0 ]]; do
     --timeout-multiplier) TIMEOUT_MULTIPLIER="${2:-}"; shift 2 ;;
     --parallel) PARALLEL="${2:-}"; shift 2 ;;
     --session-mode) SESSION_MODE="${2:-}"; shift 2 ;;
+    --phase) PHASE="${2:-}"; shift 2 ;;
+    --input-json) INPUT_JSON="${2:-}"; shift 2 ;;
+    --output-dir) OUTPUT_DIR_OVERRIDE="${2:-}"; shift 2 ;;
     *)
       echo "Unknown argument: $1" >&2
       exit 1
@@ -57,7 +63,7 @@ RESOLVED_TIMEOUT="${TIMEOUT_MULTIPLIER:-${TOKENPILOT_TIMEOUT_MULTIPLIER:-${ECOCL
 RESOLVED_PARALLEL="${PARALLEL:-${TOKENPILOT_PARALLEL:-${ECOCLAW_PARALLEL:-1}}}"
 RESOLVED_SESSION_MODE="${SESSION_MODE:-${TOKENPILOT_SESSION_MODE:-${ECOCLAW_SESSION_MODE:-isolated}}}"
 
-OUTPUT_DIR="${PINCHBENCH_ROOT}/save/${RESOLVED_SESSION_MODE}/method/raw"
+OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${PINCHBENCH_ROOT}/save/${RESOLVED_SESSION_MODE}/method/raw}"
 LOG_DIR="${PINCHBENCH_ROOT}/save/logs"
 REPORT_DIR="${PINCHBENCH_ROOT}/save/reports"
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
@@ -148,13 +154,29 @@ BENCH_ARGS=(
   --timeout-multiplier "${RESOLVED_TIMEOUT}"
   --output-dir "${OUTPUT_DIR}"
 )
+if [[ "${PHASE}" == "generate" ]]; then
+  BENCH_ARGS+=(--generate-only)
+fi
 
 DATASET_DIR="$(resolve_dataset_dir)"
 cd "${DATASET_DIR}"
-start_live_debug_tails
 trap 'run_method_exit_cleanup' EXIT
-uv run scripts/benchmark.py "${BENCH_ARGS[@]}" 2>&1 | tee "${RUN_LOG_FILE}"
-cleanup_live_debug_tails
+
+if [[ "${PHASE}" == "eval" ]]; then
+  RESULT_JSON="${INPUT_JSON:-$(latest_json_in_dir "${OUTPUT_DIR}" || true)}"
+  if [[ -z "${RESULT_JSON}" ]]; then
+    echo "Eval phase requires --input-json or an existing raw JSON in ${OUTPUT_DIR}" >&2
+    exit 1
+  fi
+  uv run scripts/evaluate_raw.py \
+    --input "${RESULT_JSON}" \
+    --judge "${RESOLVED_JUDGE}" \
+    2>&1 | tee "${RUN_LOG_FILE}"
+else
+  start_live_debug_tails
+  uv run scripts/benchmark.py "${BENCH_ARGS[@]}" 2>&1 | tee "${RUN_LOG_FILE}"
+  cleanup_live_debug_tails
+fi
 
 echo "Run log saved to: ${RUN_LOG_FILE}"
 if [[ -f "${EVAL_LOG_FILE}" ]]; then
@@ -164,7 +186,7 @@ if [[ -f "${EVAL_JSONL_FILE}" ]]; then
   echo "Eval jsonl saved to: ${EVAL_JSONL_FILE}"
 fi
 
-RESULT_JSON="$(latest_json_in_dir "${OUTPUT_DIR}" || true)"
+RESULT_JSON="${INPUT_JSON:-$(latest_json_in_dir "${OUTPUT_DIR}" || true)}"
 if [[ -n "${RESULT_JSON}" ]]; then
   COST_REPORT_FILE="${REPORT_DIR}/method_${RUN_TAG}_cost.json"
   REDUCTION_TRACE_FILE="${PLUGIN_STATE_DIR}/tokenpilot/reduction-pass-trace.jsonl"

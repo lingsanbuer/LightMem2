@@ -13,6 +13,9 @@ RUNS=""
 TIMEOUT_MULTIPLIER=""
 PARALLEL=""
 SESSION_MODE=""
+PHASE="full"
+INPUT_JSON=""
+OUTPUT_DIR_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,6 +26,9 @@ while [[ $# -gt 0 ]]; do
     --timeout-multiplier) TIMEOUT_MULTIPLIER="${2:-}"; shift 2 ;;
     --parallel) PARALLEL="${2:-}"; shift 2 ;;
     --session-mode) SESSION_MODE="${2:-}"; shift 2 ;;
+    --phase) PHASE="${2:-}"; shift 2 ;;
+    --input-json) INPUT_JSON="${2:-}"; shift 2 ;;
+    --output-dir) OUTPUT_DIR_OVERRIDE="${2:-}"; shift 2 ;;
     *)
       echo "Unknown argument: $1" >&2
       exit 1
@@ -135,7 +141,7 @@ configure_baseline_runtime "${RESOLVED_MODEL}" "${RESOLVED_JUDGE}"
 validate_openclaw_runtime_config
 ECOCLAW_FORCE_GATEWAY_RESTART="${TOKENPILOT_FORCE_GATEWAY_RESTART:-${ECOCLAW_FORCE_GATEWAY_RESTART:-true}}" ensure_openclaw_gateway_running
 
-OUTPUT_DIR="${PINCHBENCH_ROOT}/save/${RESOLVED_SESSION_MODE}/baseline/raw"
+OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${PINCHBENCH_ROOT}/save/${RESOLVED_SESSION_MODE}/baseline/raw}"
 LOG_DIR="${PINCHBENCH_ROOT}/save/logs"
 REPORT_DIR="${PINCHBENCH_ROOT}/save/reports"
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
@@ -160,10 +166,25 @@ BENCH_ARGS=(
   --timeout-multiplier "${RESOLVED_TIMEOUT}"
   --output-dir "${OUTPUT_DIR}"
 )
+if [[ "${PHASE}" == "generate" ]]; then
+  BENCH_ARGS+=(--generate-only)
+fi
 
 DATASET_DIR="$(resolve_dataset_dir)"
 cd "${DATASET_DIR}"
-uv run scripts/benchmark.py "${BENCH_ARGS[@]}" 2>&1 | tee "${RUN_LOG_FILE}"
+if [[ "${PHASE}" == "eval" ]]; then
+  RESULT_JSON="${INPUT_JSON:-$(latest_json_in_dir "${OUTPUT_DIR}" || true)}"
+  if [[ -z "${RESULT_JSON}" ]]; then
+    echo "Eval phase requires --input-json or an existing raw JSON in ${OUTPUT_DIR}" >&2
+    exit 1
+  fi
+  uv run scripts/evaluate_raw.py \
+    --input "${RESULT_JSON}" \
+    --judge "${RESOLVED_JUDGE}" \
+    2>&1 | tee "${RUN_LOG_FILE}"
+else
+  uv run scripts/benchmark.py "${BENCH_ARGS[@]}" 2>&1 | tee "${RUN_LOG_FILE}"
+fi
 
 if [[ -f "${DATASET_DIR}/benchmark.log" ]]; then
   cp "${DATASET_DIR}/benchmark.log" "${BENCHMARK_LOG_FILE}"
@@ -174,7 +195,7 @@ if [[ -f "${BENCHMARK_LOG_FILE}" ]]; then
   echo "Benchmark log saved to: ${BENCHMARK_LOG_FILE}"
 fi
 
-RESULT_JSON="$(latest_json_in_dir "${OUTPUT_DIR}" || true)"
+RESULT_JSON="${INPUT_JSON:-$(latest_json_in_dir "${OUTPUT_DIR}" || true)}"
 if [[ -n "${RESULT_JSON}" ]]; then
   COST_REPORT_FILE="${REPORT_DIR}/baseline_${RUN_TAG}_cost.json"
   generate_cost_report_and_print_summary "${RESULT_JSON}" "${COST_REPORT_FILE}"
