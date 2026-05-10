@@ -7,5 +7,5 @@ CLAW_EVAL_REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 exec bash "${CLAW_EVAL_REPO_ROOT}/scripts/run_method.sh" \
   --scope general \
   --session-mode isolated \
-  --profile reduction \
+  --profile plugin \
   "$@"

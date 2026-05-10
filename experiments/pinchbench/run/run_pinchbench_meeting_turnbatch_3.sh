@@ -20,6 +20,7 @@ RUNTIME_OPENCLAW_HOME="${PINCHBENCH_RUNTIME_OPENCLAW_HOME:-${PINCHBENCH_TMP_ROOT
 OPENCLAW_HOME="${RUNTIME_OPENCLAW_HOME}"
 OPENCLAW_CFG="${OPENCLAW_HOME}/.openclaw/openclaw.json"
 OPENCLAW_STATE_DIR="${OPENCLAW_HOME}/.openclaw"
+OPENCLAW_PROFILE="${PINCHBENCH_OPENCLAW_PROFILE:-pinchbench-meeting-turnbatch3}"
 # Keep the estimator env focused on estimator settings. For the actual agent
 # model route, prefer the same shorthand/provider-based path as the known-good
 # baseline meeting runs instead of inheriting TOKENPILOT_MODEL from estimator.env.
@@ -88,6 +89,7 @@ PY
   TOKENPILOT_OPENCLAW_HOME="${OPENCLAW_HOME}" \
   OPENCLAW_CONFIG_PATH="${OPENCLAW_CFG}" \
   OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR}" \
+  OPENCLAW_PROFILE="${OPENCLAW_PROFILE}" \
   pnpm plugin:install:release
 )
 
@@ -109,6 +111,7 @@ TOKENPILOT_EXEC_ASK=off \
 TOKENPILOT_OPENCLAW_HOME="${OPENCLAW_HOME}" \
 OPENCLAW_CONFIG_PATH="${OPENCLAW_CFG}" \
 OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR}" \
+OPENCLAW_PROFILE="${OPENCLAW_PROFILE}" \
 PINCHBENCH_TMP_ROOT="${PINCHBENCH_TMP_ROOT}" \
 "${PINCHBENCH_ROOT}/scripts/run_method.sh" \
   --model "${METHOD_MODEL}" \

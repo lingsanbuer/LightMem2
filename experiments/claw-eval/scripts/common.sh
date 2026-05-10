@@ -109,6 +109,73 @@ ce_prepare_tmp_openclaw_home() {
   echo "[tmp-openclaw] config=${OPENCLAW_CONFIG_PATH}"
 }
 
+ce_strip_foreground_arg() {
+  local out=()
+  for arg in "$@"; do
+    [[ "${arg}" == "--foreground" ]] && continue
+    out+=("${arg}")
+  done
+  printf '%s\n' "${out[@]}"
+}
+
+ce_ensure_openai_responses_provider() {
+  local provider_id="${1:?provider id is required}"
+  local base_url="${2:?base url is required}"
+  local api_key="${3:?api key is required}"
+  local config_path="${OPENCLAW_CONFIG_PATH:-${HOME}/.openclaw/openclaw.json}"
+  if [[ ! -f "${config_path}" ]]; then
+    echo "Missing OpenClaw config: ${config_path}" >&2
+    return 1
+  fi
+  python3 - <<'PY' "${config_path}" "${provider_id}" "${base_url}" "${api_key}"
+import json
+import pathlib
+import sys
+
+cfg_path = pathlib.Path(sys.argv[1])
+provider_id = sys.argv[2]
+base_url = sys.argv[3]
+api_key = sys.argv[4]
+doc = json.loads(cfg_path.read_text(encoding="utf-8"))
+doc.setdefault("models", {}).setdefault("providers", {})
+providers = doc["models"]["providers"]
+providers[provider_id] = {
+    "baseUrl": base_url,
+    "apiKey": api_key,
+    "api": "openai-responses",
+    "models": [
+        {
+            "id": "gpt-5.4-mini",
+            "name": "gpt-5.4-mini",
+            "reasoning": True,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+        },
+        {
+            "id": "gpt-5.4",
+            "name": "gpt-5.4",
+            "reasoning": True,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+        },
+    ],
+}
+cfg_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"updated {cfg_path}")
+PY
+}
+
+ce_install_release_plugin() {
+  (
+    cd "${PROJECT_ROOT}"
+    TOKENPILOT_OPENCLAW_HOME="${TOKENPILOT_OPENCLAW_HOME:-${HOME}}" \
+    OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH}" \
+    pnpm plugin:install:release
+  )
+}
+
 ce_scope_to_suite() {
   local scope="${1:?scope is required}"
   local explicit_suite="${2:-}"
