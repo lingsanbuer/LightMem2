@@ -22,7 +22,12 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lib_agent import ensure_agent_exists, execute_task, patch_agent_tool_restrictions_for_tasks
+from lib_agent import (
+    ensure_agent_exists,
+    execute_task,
+    extract_usage_from_transcript,
+    patch_agent_tool_restrictions_for_tasks,
+)
 from lib_grading import grade_execution_result
 from lib_services import (
     activate_plugins_for_run,
@@ -192,35 +197,10 @@ def _default_service_code_root() -> Path:
     return (Path(__file__).resolve().parents[1] / "vendor").resolve()
 
 
-def _available_provider_models(config_path: Path) -> set[str]:
-    if not config_path.exists():
-        return set()
-    try:
-        cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception:
-        return set()
-    available: set[str] = set()
-    providers = ((cfg.get("models") or {}).get("providers") or {})
-    for provider_name, provider_cfg in providers.items():
-        for model in provider_cfg.get("models") or []:
-            model_id = str(model.get("id") or "").strip()
-            if model_id:
-                available.add(f"{provider_name}/{model_id}")
-    return available
-
-
 def _resolve_model_id(requested_model: str | None, config_path: Path, *, purpose: str) -> str:
     model = (requested_model or "").strip()
     if not model:
         model = "ecoclaw/gpt-5.4-mini" if purpose == "execution" else "tokenpilot/gpt-5.4-mini"
-    if "/" in model:
-        return model
-
-    available = _available_provider_models(config_path)
-    for provider in ("ecoclaw", "tokenpilot", "dica", "gmn"):
-        candidate = f"{provider}/{model}"
-        if candidate in available:
-            return candidate
     return model
 
 
@@ -247,6 +227,27 @@ def _synchronize_run_tool_allowlist(config_path: Path, tasks, known_task_tools) 
     if tools["allow"] != allow:
         config_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return required_tools
+
+
+def _slice_continuous_result(result: dict[str, object], transcript_start: int) -> tuple[dict[str, object], dict[str, int]]:
+    transcript = result.get("transcript")
+    if not isinstance(transcript, list):
+        transcript = []
+    start = max(0, min(transcript_start, len(transcript)))
+    end = len(transcript)
+    sliced = transcript[start:end]
+    sliced_result = dict(result)
+    sliced_result["transcript"] = sliced
+    sliced_result["transcript_entries"] = len(sliced)
+    sliced_result["usage"] = extract_usage_from_transcript(sliced)
+    span = {
+        "mode": "continuous",
+        "start": start,
+        "end": end,
+        "length": max(0, end - start),
+    }
+    sliced_result["transcript_span"] = span
+    return sliced_result, span
 
 
 def main() -> None:
@@ -384,6 +385,7 @@ def main() -> None:
                 shared_agent_id = None
                 shared_workspace = None
                 shared_session_id = None
+                transcript_cursor = 0
                 if args.session_mode == "continuous":
                     model_slug = execution_model.replace("/", "-").replace(":", "-")
                     shared_agent_id = f"ce-{model_slug}-{run_id}-serial"
@@ -404,7 +406,7 @@ def main() -> None:
                         )
                 for task in selected_tasks:
                     print(f"[task] {task.task_id} ({task.category})")
-                    result = execute_task(
+                    raw_result = execute_task(
                         task,
                         model_id=execution_model,
                         run_root=run_root,
@@ -419,6 +421,11 @@ def main() -> None:
                         ensure_agent=not (args.session_mode == "continuous"),
                         session_mode=args.session_mode,
                     )
+                    if args.session_mode == "continuous":
+                        result, span = _slice_continuous_result(raw_result, transcript_cursor)
+                        transcript_cursor = int(span["end"])
+                    else:
+                        result = raw_result
                     grade = grade_execution_result(
                         task_yaml_path=task.task_yaml_path,
                         execution_result=result,

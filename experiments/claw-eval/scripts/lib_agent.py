@@ -1195,6 +1195,10 @@ def _extract_usage(transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
     return totals
 
 
+def extract_usage_from_transcript(transcript: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return _extract_usage(transcript)
+
+
 def _count_audit_calls(audit_data: Dict[str, Dict[str, Any]]) -> int:
     total = 0
     for service_data in audit_data.values():

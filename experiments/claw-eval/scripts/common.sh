@@ -4,56 +4,36 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAW_EVAL_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd "${CLAW_EVAL_ROOT}/../../.." && pwd)"
-
 CLAW_EVAL_BENCH_PY="${CLAW_EVAL_ROOT}/scripts/benchmark.py"
 CLAW_EVAL_TASKS_DIR="${CLAW_EVAL_ROOT}/dataset/tasks"
 CLAW_EVAL_SOURCE_DIR="${CLAW_EVAL_ROOT}/vendor"
 CLAW_EVAL_PLUGIN_ROOT="${CLAW_EVAL_ROOT}/plugins"
-CLAW_EVAL_DEFAULT_OPENCLAW_HOME="${CLAW_EVAL_DEFAULT_OPENCLAW_HOME:-/home/xubuqiang}"
-CLAW_EVAL_DEFAULT_OPENCLAW_CONFIG_PATH="${CLAW_EVAL_DEFAULT_OPENCLAW_CONFIG_PATH:-${CLAW_EVAL_DEFAULT_OPENCLAW_HOME}/.openclaw/openclaw.json}"
+
+# Reuse the pinchbench runtime/env/config stack and keep claw-eval-specific
+# naming as a compatibility shim for older run scripts.
+# shellcheck source=/mnt/20t/xubuqiang/EcoClaw/TokenPilot/experiments/pinchbench/scripts/common.sh
+source "${PROJECT_ROOT}/experiments/pinchbench/scripts/common.sh"
 
 ce_import_dotenv() {
-  local env_path="$1"
-  [[ -f "${env_path}" ]] || return 0
-
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line%"${line##*[![:space:]]}"}"
-    [[ -z "${line}" ]] && continue
-    [[ "${line}" == \#* ]] && continue
-    [[ "${line}" != *=* ]] && continue
-    local key="${line%%=*}"
-    local value="${line#*=}"
-    key="${key%"${key##*[![:space:]]}"}"
-    value="${value#"${value%%[![:space:]]*}"}"
-    value="${value%"${value##*[![:space:]]}"}"
-    if [[ -n "${!key+x}" ]]; then
-      continue
-    fi
-    export "${key}=${value}"
-  done < "${env_path}"
+  import_dotenv "$@"
 }
 
 ce_import_runtime_envs() {
-  ce_import_dotenv "${CLAW_EVAL_ROOT}/.env"
-  ce_import_dotenv "${PROJECT_ROOT}/.env"
-  ce_import_dotenv "${PROJECT_ROOT}/experiments/pinchbench/.env"
+  import_runtime_envs
 }
 
 ce_normalize_runtime_env() {
-  export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${CLAW_EVAL_DEFAULT_OPENCLAW_CONFIG_PATH}}"
-  export TOKENPILOT_OPENCLAW_HOME="${TOKENPILOT_OPENCLAW_HOME:-${CLAW_EVAL_DEFAULT_OPENCLAW_HOME}}"
+  normalize_openclaw_runtime_env
+  export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${TOKENPILOT_OPENCLAW_HOME:-${ECOCLAW_OPENCLAW_HOME:-${HOME}}}/.openclaw/openclaw.json}"
+  export TOKENPILOT_OPENCLAW_HOME="${TOKENPILOT_OPENCLAW_HOME:-${ECOCLAW_OPENCLAW_HOME:-${HOME}}}"
   export HOME="${HOME:-${TOKENPILOT_OPENCLAW_HOME}}"
   export CLAW_EVAL_SOURCE_ROOT="${CLAW_EVAL_SOURCE_ROOT:-${CLAW_EVAL_SOURCE_DIR}}"
-  export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/openclaw-cache}"
-  export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
-  export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/uv-cache}"
   export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
   export CLAW_EVAL_AGENT_TIMEOUT_SECONDS="${CLAW_EVAL_AGENT_TIMEOUT_SECONDS:-0}"
-  mkdir -p "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${UV_CACHE_DIR}"
 }
 
 ce_apply_baseline_profile() {
+  export TOKENPILOT_RUNTIME_ENABLED="${TOKENPILOT_RUNTIME_ENABLED:-false}"
   export TOKENPILOT_ENABLE_REDUCTION="${TOKENPILOT_ENABLE_REDUCTION:-false}"
   export TOKENPILOT_ENABLE_EVICTION="${TOKENPILOT_ENABLE_EVICTION:-false}"
   export TOKENPILOT_TASK_STATE_ESTIMATOR_ENABLED="${TOKENPILOT_TASK_STATE_ESTIMATOR_ENABLED:-false}"
@@ -64,11 +44,13 @@ ce_apply_method_profile() {
   local profile="${1:-plugin}"
   case "${profile}" in
     plugin)
+      export TOKENPILOT_RUNTIME_ENABLED="${TOKENPILOT_RUNTIME_ENABLED:-true}"
       export TOKENPILOT_ENABLE_REDUCTION="${TOKENPILOT_ENABLE_REDUCTION:-true}"
       export TOKENPILOT_ENABLE_EVICTION="${TOKENPILOT_ENABLE_EVICTION:-true}"
       export TOKENPILOT_TASK_STATE_ESTIMATOR_ENABLED="${TOKENPILOT_TASK_STATE_ESTIMATOR_ENABLED:-true}"
       ;;
     reduction)
+      export TOKENPILOT_RUNTIME_ENABLED="${TOKENPILOT_RUNTIME_ENABLED:-true}"
       export TOKENPILOT_ENABLE_REDUCTION="${TOKENPILOT_ENABLE_REDUCTION:-true}"
       export TOKENPILOT_ENABLE_EVICTION="${TOKENPILOT_ENABLE_EVICTION:-false}"
       export TOKENPILOT_TASK_STATE_ESTIMATOR_ENABLED="${TOKENPILOT_TASK_STATE_ESTIMATOR_ENABLED:-false}"
@@ -101,7 +83,7 @@ ce_require_estimator_env_if_enabled() {
 
 ce_prepare_tmp_openclaw_home() {
   local label="${1:-run}"
-  local source_home="${SOURCE_OPENCLAW_HOME:-${CLAW_EVAL_DEFAULT_OPENCLAW_HOME}}"
+  local source_home="${SOURCE_OPENCLAW_HOME:-${TOKENPILOT_OPENCLAW_HOME:-${ECOCLAW_OPENCLAW_HOME:-${HOME}}}}"
   local source_state_dir="${SOURCE_OPENCLAW_STATE_DIR:-${source_home}/.openclaw}"
   if [[ ! -d "${source_state_dir}" ]]; then
     echo "Missing source OpenClaw state dir: ${source_state_dir}" >&2
@@ -210,6 +192,13 @@ ce_run_benchmark() {
   local max_tasks="${8:-0}"
   shift 8
 
+  local resolved_model resolved_judge
+  apply_model_runtime_env "${model}"
+  require_method_runtime_env
+  apply_runtime_env
+  resolved_model="$(resolve_model_alias "${model}")"
+  resolved_judge="$(resolve_model_alias "${judge}")"
+
   local -a cmd=(
     uv run --directory "${CLAW_EVAL_SOURCE_DIR}" --extra mock python -u "${CLAW_EVAL_BENCH_PY}"
     --tasks-dir "${CLAW_EVAL_TASKS_DIR}"
@@ -217,8 +206,8 @@ ce_run_benchmark() {
     --phase "${phase}"
     --session-mode "${session_mode}"
     --parallel "${parallel}"
-    --model "${model}"
-    --judge "${judge}"
+    --model "${resolved_model}"
+    --judge "${resolved_judge}"
     --plugin-root "${CLAW_EVAL_PLUGIN_ROOT}"
     --openclaw-config-path "${OPENCLAW_CONFIG_PATH}"
     --apply-plugin-plan
