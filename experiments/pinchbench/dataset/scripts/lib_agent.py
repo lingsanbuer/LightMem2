@@ -513,14 +513,11 @@ def prepare_task_workspace(
 
 def _get_agent_store_dir(agent_id: str) -> Path:
     state_dir = os.environ.get("OPENCLAW_STATE_DIR")
-    if state_dir:
-        base_dir = Path(state_dir) / "agents"
-    else:
-        base_dir = Path.home() / ".openclaw" / "agents"
+    base_dir = Path(state_dir).resolve() / "agents" if state_dir else Path.home() / ".openclaw" / "agents"
     direct_dir = base_dir / agent_id
+    normalized_dir = base_dir / agent_id.replace(":", "-")
     if direct_dir.exists():
         return direct_dir
-    normalized_dir = base_dir / agent_id.replace(":", "-")
     if normalized_dir.exists():
         return normalized_dir
     return direct_dir
