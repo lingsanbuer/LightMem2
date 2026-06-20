@@ -62,7 +62,7 @@ LightMem2/
 └── TokenPilot/
     ├── experiment-data/
     │   └── pinchbench/
-    │       └── dataset-assets/
+    │       └── assets/
     └── experiment-results/
         └── pinchbench/
             ├── isolated/
@@ -75,7 +75,7 @@ Local mount point for the input asset bundle:
 
 Before running a fresh machine:
 
-1. download `dataset-assets/` from Drive
+1. download `assets/` from Drive
 2. copy the files into `dataset/assets/`
 3. run the official baseline or method command
 4. upload large result folders/logs to `experiment-results/pinchbench/`

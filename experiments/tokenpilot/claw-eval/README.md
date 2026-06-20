@@ -47,7 +47,7 @@ LightMem2/
 └── TokenPilot/
     ├── experiment-data/
     │   └── claw-eval/
-    │       ├── general-bundle/
+    │       ├── general/
     │       └── tasks/
     └── experiment-results/
         └── claw-eval/
@@ -64,7 +64,7 @@ See:
 
 When you prepare a fresh machine:
 
-1. download `general-bundle/` from Drive
+1. download `general/` from Drive
 2. copy its contents into `dataset/general/`
 3. download `tasks/` from Drive
 4. copy it back under `dataset/tasks/`

@@ -33,9 +33,9 @@ LightMem2/
 └── TokenPilot/
     ├── experiment-data/
     │   ├── pinchbench/
-    │   │   └── dataset-assets/
+    │   │   └── assets/
     │   └── claw-eval/
-    │       ├── general-bundle/
+    │       ├── general/
     │       └── tasks/
     └── experiment-results/
         ├── pinchbench/
@@ -94,7 +94,7 @@ The canonical public entrypoints are:
 - local asset mount point:
   - `experiments/tokenpilot/pinchbench/dataset/assets/`
 - recommended Drive source:
-  - `LightMem2/TokenPilot/experiment-data/pinchbench/dataset-assets/`
+  - `LightMem2/TokenPilot/experiment-data/pinchbench/assets/`
 - recommended Drive result sink:
   - `LightMem2/TokenPilot/experiment-results/pinchbench/`
 
@@ -106,7 +106,7 @@ The canonical public entrypoints are:
   - `experiments/tokenpilot/claw-eval/dataset/general/`
   - `experiments/tokenpilot/claw-eval/dataset/tasks/`
 - recommended Drive source:
-  - `LightMem2/TokenPilot/experiment-data/claw-eval/general-bundle/`
+  - `LightMem2/TokenPilot/experiment-data/claw-eval/general/`
   - `LightMem2/TokenPilot/experiment-data/claw-eval/tasks/`
 - recommended Drive result sink:
   - `LightMem2/TokenPilot/experiment-results/claw-eval/`
