@@ -10,7 +10,7 @@ import {
 } from "./after-call-sse.js";
 
 export type AfterCallPassToggles = {
-  repeatedReadDedup?: boolean;
+  readStateCompaction?: boolean;
   toolPayloadTrim?: boolean;
   htmlSlimming?: boolean;
   execOutputTruncation?: boolean;

@@ -4,7 +4,7 @@ import type { ContextSegment, RuntimeModule } from "@tokenpilot/kernel";
 import type { ProxyReductionBinding } from "./reduction-context-types.js";
 
 export type BeforeCallPassToggles = {
-  repeatedReadDedup?: boolean;
+  readStateCompaction?: boolean;
   toolPayloadTrim?: boolean;
   htmlSlimming?: boolean;
   execOutputTruncation?: boolean;

@@ -71,8 +71,38 @@ export function extractPathLike(value: any): string | undefined {
     : undefined;
 }
 
-export function parseFunctionCallArgsMapFromInput(input: any[]): Map<string, { toolName?: string; path?: string }> {
-  const map = new Map<string, { toolName?: string; path?: string }>();
+export function extractReadWindow(
+  value: any,
+): { offset?: number; limit?: number } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const rawOffset = value.offset;
+  const rawLimit = value.limit;
+  const offset =
+    typeof rawOffset === "number" && Number.isFinite(rawOffset) && rawOffset > 0
+      ? Math.floor(rawOffset)
+      : undefined;
+  const limit =
+    typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.floor(rawLimit)
+      : undefined;
+  if (offset == null && limit == null) return undefined;
+  return { offset, limit };
+}
+
+export function buildReadWindowKey(
+  dataPath: string,
+  readWindow?: { offset?: number; limit?: number },
+): string {
+  const offset = readWindow?.offset;
+  const limit = readWindow?.limit;
+  if (offset == null && limit == null) return `${dataPath}#full`;
+  return `${dataPath}#offset=${offset ?? "?"}:limit=${limit ?? "?"}`;
+}
+
+export function parseFunctionCallArgsMapFromInput(
+  input: any[],
+): Map<string, { toolName?: string; path?: string; readWindow?: { offset?: number; limit?: number } }> {
+  const map = new Map<string, { toolName?: string; path?: string; readWindow?: { offset?: number; limit?: number } }>();
   for (const item of input) {
     if (!item || typeof item !== "object") continue;
     const type = String(item.type ?? "").toLowerCase();
@@ -95,10 +125,19 @@ export function parseFunctionCallArgsMapFromInput(input: any[]): Map<string, { t
             : undefined;
 
     let path = extractPathLike(item) ?? extractPathLike(item?.details);
+    let readWindow = extractReadWindow(item) ?? extractReadWindow(item?.details);
     if (!path) {
       try {
         const args = typeof item.arguments === "string" ? JSON.parse(item.arguments) : item.arguments;
         path = extractPathLike(args);
+        readWindow = readWindow ?? extractReadWindow(args);
+      } catch {
+        // Ignore malformed tool arguments.
+      }
+    } else if (!readWindow) {
+      try {
+        const args = typeof item.arguments === "string" ? JSON.parse(item.arguments) : item.arguments;
+        readWindow = extractReadWindow(args);
       } catch {
         // Ignore malformed tool arguments.
       }
@@ -113,21 +152,22 @@ export function parseFunctionCallArgsMapFromInput(input: any[]): Map<string, { t
         if (!nestedCallId) continue;
         const nestedToolName =
           typeof block.name === "string" && block.name.trim().length > 0 ? block.name.trim() : undefined;
-        const nestedPath =
-          extractPathLike(block)
-          ?? (() => {
-            try {
-              const args = typeof block.arguments === "string" ? JSON.parse(block.arguments) : block.arguments;
-              return extractPathLike(args);
-            } catch {
-              return undefined;
-            }
-          })();
-        map.set(nestedCallId, { toolName: nestedToolName, path: nestedPath });
+        let nestedPath = extractPathLike(block);
+        let nestedReadWindow = extractReadWindow(block);
+        if (!nestedPath || !nestedReadWindow) {
+          try {
+            const args = typeof block.arguments === "string" ? JSON.parse(block.arguments) : block.arguments;
+            nestedPath = nestedPath ?? extractPathLike(args);
+            nestedReadWindow = nestedReadWindow ?? extractReadWindow(args);
+          } catch {
+            // Ignore malformed tool arguments.
+          }
+        }
+        map.set(nestedCallId, { toolName: nestedToolName, path: nestedPath, readWindow: nestedReadWindow });
       }
     }
 
-    map.set(callId, { toolName, path });
+    map.set(callId, { toolName, path, readWindow });
   }
   return map;
 }

@@ -64,7 +64,7 @@ export async function applyProxyAfterCallReduction(params: {
           resolvedSessionId,
           cfg.reduction.passes,
           {
-            repeated_read_dedup: reductionPassOptions.repeatedReadDedup ?? {},
+            read_state_compaction: reductionPassOptions.readStateCompaction ?? {},
             tool_payload_trim: reductionPassOptions.toolPayloadTrim ?? {},
             html_slimming: reductionPassOptions.htmlSlimming ?? {},
             exec_output_truncation: reductionPassOptions.execOutputTruncation ?? {},
@@ -93,7 +93,7 @@ export async function applyProxyAfterCallReduction(params: {
           reductionTriggerMinChars,
           cfg.reduction.passes,
           {
-            repeated_read_dedup: reductionPassOptions.repeatedReadDedup ?? {},
+            read_state_compaction: reductionPassOptions.readStateCompaction ?? {},
             tool_payload_trim: reductionPassOptions.toolPayloadTrim ?? {},
             html_slimming: reductionPassOptions.htmlSlimming ?? {},
             exec_output_truncation: reductionPassOptions.execOutputTruncation ?? {},

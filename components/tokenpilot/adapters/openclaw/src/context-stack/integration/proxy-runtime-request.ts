@@ -120,7 +120,7 @@ async function applyProxyReduction(
           },
           cfg.reduction.passes,
           {
-            repeated_read_dedup: reductionPassOptions.repeatedReadDedup ?? {},
+            read_state_compaction: reductionPassOptions.readStateCompaction ?? {},
             tool_payload_trim: reductionPassOptions.toolPayloadTrim ?? {},
             html_slimming: reductionPassOptions.htmlSlimming ?? {},
             exec_output_truncation: reductionPassOptions.execOutputTruncation ?? {},
@@ -163,7 +163,7 @@ async function applyProxyReduction(
             maxToolChars: cfg.reduction.maxToolChars,
             passToggles: cfg.reduction.passes,
             passOptions: {
-              repeated_read_dedup: reductionPassOptions.repeatedReadDedup ?? {},
+              read_state_compaction: reductionPassOptions.readStateCompaction ?? {},
               tool_payload_trim: reductionPassOptions.toolPayloadTrim ?? {},
               html_slimming: reductionPassOptions.htmlSlimming ?? {},
               exec_output_truncation: reductionPassOptions.execOutputTruncation ?? {},

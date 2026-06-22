@@ -36,7 +36,7 @@ export function buildLayeredReductionContext(
     onReducibleText: instructionCollector.addReductionInstructions,
     onReadSegment: instructionCollector.recordReadSegmentId,
   });
-  instructionCollector.finalizeRepeatedReadInstructions();
+  instructionCollector.finalizeReadStateInstructions();
 
   const turnCtx: RuntimeTurnContext = {
     sessionId: sessionId.trim() || "proxy-session",
@@ -58,7 +58,7 @@ export function buildLayeredReductionContext(
           reduction: {
             enabled: true,
             beforeCallPassIds: [
-              instructionCollector.stats.passToggles.repeatedReadDedup ? "repeated_read_dedup" : null,
+              instructionCollector.stats.passToggles.readStateCompaction ? "read_state_compaction" : null,
               instructionCollector.stats.passToggles.toolPayloadTrim ? "tool_payload_trim" : null,
               instructionCollector.stats.passToggles.htmlSlimming ? "html_slimming" : null,
               instructionCollector.stats.passToggles.execOutputTruncation ? "exec_output_truncation" : null,

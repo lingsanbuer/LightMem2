@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ContextSegment } from "@tokenpilot/kernel";
 import {
+  buildReadWindowKey,
   detectToolPayloadKind,
   extractPathLike,
   isContextSafePersistedInputItem,
@@ -18,7 +19,13 @@ export function scanReductionInput(params: {
   segmentAnchorByCallId?: Map<string, { turnAbsIds: string[]; taskIds: string[] }>;
   orderedTurnAnchors?: Array<{ turnAbsId: string; taskIds: string[] }>;
   onReducibleText: (segmentId: string, text: string, toolName: string) => void;
-  onReadSegment: (toolName: string, dataPath: string, segmentId: string, fieldName?: string) => void;
+  onReadSegment: (
+    toolName: string,
+    dataPath: string,
+    readKey: string,
+    segmentId: string,
+    fieldName?: string,
+  ) => void;
 }): {
   segments: ContextSegment[];
   bindings: ProxyReductionBinding[];
@@ -107,6 +114,8 @@ export function scanReductionInput(params: {
         }
       })();
     const dataPath = String(callMeta?.path ?? directPath ?? "").trim();
+    const readWindow = callMeta?.readWindow;
+    const readKey = dataPath ? buildReadWindowKey(dataPath, readWindow) : "";
 
     const buildMetadata = (
       text: string,
@@ -129,6 +138,7 @@ export function scanReductionInput(params: {
       toolPayload: {
         toolName,
         path: dataPath,
+        readWindow,
         turnAbsIds: anchored?.turnAbsIds,
         taskIds: anchored?.taskIds,
         payloadKind: detectToolPayloadKind(text, deps) ?? "stdout",
@@ -152,7 +162,7 @@ export function scanReductionInput(params: {
       if (applyReduction && !isMemoryFaultRecoveryTool) {
         onReducibleText(segmentId, text, toolName);
       }
-      onReadSegment(toolName, dataPath, segmentId, fieldName);
+      onReadSegment(toolName, dataPath, readKey, segmentId, fieldName);
     };
 
     pushFieldBinding("arguments", false);
@@ -170,7 +180,7 @@ export function scanReductionInput(params: {
       if (!isMemoryFaultRecoveryTool) {
         onReducibleText(segmentId, item.content, toolName);
       }
-      onReadSegment(toolName, dataPath, segmentId);
+      onReadSegment(toolName, dataPath, readKey, segmentId);
     }
 
     if (Array.isArray(item.content)) {
@@ -204,7 +214,7 @@ export function scanReductionInput(params: {
         if (!isMemoryFaultRecoveryTool) {
           onReducibleText(segmentId, text, toolName);
         }
-        onReadSegment(toolName, dataPath, segmentId);
+        onReadSegment(toolName, dataPath, readKey, segmentId);
       });
     }
   }

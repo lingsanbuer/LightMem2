@@ -21,7 +21,7 @@ export type ProxyReductionBinding =
   };
 
 export type ReductionContextPassToggles = {
-  repeatedReadDedup?: boolean;
+  readStateCompaction?: boolean;
   toolPayloadTrim?: boolean;
   htmlSlimming?: boolean;
   execOutputTruncation?: boolean;

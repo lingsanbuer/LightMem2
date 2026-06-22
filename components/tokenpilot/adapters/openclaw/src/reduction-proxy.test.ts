@@ -55,6 +55,7 @@ const hooks = plugin.__testHooks as {
     requestEnvelope: any;
     reductionApplied: {
       diagnostics?: {
+        instructionCount?: number;
         skippedReason?: string;
       };
     };
@@ -207,7 +208,7 @@ test("applyProxyReductionToInput still runs with policy-only before-call modules
     triggerMinChars: 2200,
     maxToolChars: 1200,
     passToggles: {
-      repeatedReadDedup: false,
+      readStateCompaction: false,
       toolPayloadTrim: false,
       htmlSlimming: false,
       execOutputTruncation: false,
@@ -235,6 +236,123 @@ test("applyProxyReductionToInput still runs with policy-only before-call modules
     payload.input[1].content,
     "Successfully wrote 120 bytes to /workspace/output.md",
   );
+});
+
+test("prepareProxyRequest does not compact distinct read windows of the same file", async () => {
+  const cfg = hooks.normalizeConfig({
+    modules: {
+      policy: false,
+      reduction: true,
+    },
+  });
+
+  const payload: any = {
+    model: "tokenpilot/gpt-5.4-mini",
+    input: [
+      {
+        type: "function_call",
+        call_id: "call_read_1",
+        name: "read",
+        arguments: JSON.stringify({ path: "/workspace/spec.md", offset: 1, limit: 200 }),
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_read_1",
+        output: "A".repeat(1600),
+      },
+      {
+        type: "function_call",
+        call_id: "call_read_2",
+        name: "read",
+        arguments: JSON.stringify({ path: "/workspace/spec.md", offset: 201, limit: 200 }),
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_read_2",
+        output: "B".repeat(1600),
+      },
+    ],
+  };
+
+  const prepared = await hooks.prepareProxyRequest({
+    cfg,
+    payload,
+    upstream: {
+      provider: "test",
+      api: "responses",
+      baseUrl: "https://example.com/v1",
+      apiKey: "test-key",
+      model: "gpt-5.4-mini",
+    },
+    reductionPassOptions: {},
+    dynamicContextTarget: "developer",
+  });
+
+  const outputs = prepared.payload.input
+    .filter((item: any) => item.type === "function_call_output")
+    .map((item: any) => String(item.output));
+
+  assert.equal(outputs.length, 2);
+  assert.equal(outputs.every((text: string) => !text.includes("[Read superseded]")), true);
+});
+
+test("prepareProxyRequest does not emit read-state instructions for distinct read windows", async () => {
+  const cfg = hooks.normalizeConfig({
+    modules: {
+      policy: false,
+      reduction: true,
+    },
+  });
+
+  const payload: any = {
+    model: "tokenpilot/gpt-5.4-mini",
+    input: [
+      {
+        type: "function_call",
+        call_id: "call_read_1",
+        name: "read",
+        arguments: JSON.stringify({ path: "/workspace/spec.md", offset: 1, limit: 200 }),
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_read_1",
+        output: "A".repeat(1600),
+      },
+      {
+        type: "function_call",
+        call_id: "call_read_2",
+        name: "read",
+        arguments: JSON.stringify({ path: "/workspace/spec.md", offset: 201, limit: 200 }),
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_read_2",
+        output: "B".repeat(1600),
+      },
+    ],
+  };
+
+  const prepared = await hooks.prepareProxyRequest({
+    cfg,
+    payload,
+    upstream: {
+      provider: "test",
+      api: "responses",
+      baseUrl: "https://example.com/v1",
+      apiKey: "test-key",
+      model: "gpt-5.4-mini",
+    },
+    reductionPassOptions: {},
+    dynamicContextTarget: "developer",
+  });
+
+  const outputs = prepared.payload.input
+    .filter((item: any) => item.type === "function_call_output")
+    .map((item: any) => String(item.output));
+
+  assert.equal(outputs.length, 2);
+  assert.equal(outputs.every((text: string) => !text.includes("[Read superseded]")), true);
+  assert.equal(outputs.every((text: string) => !text.includes("[Read stale]")), true);
 });
 
 test("prepareProxyRequest still runs policy before-call when reduction module is disabled", async () => {

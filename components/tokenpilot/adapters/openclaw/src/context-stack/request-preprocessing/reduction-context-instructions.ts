@@ -3,7 +3,7 @@ import { detectToolPayloadKind, type BuildLayeredReductionContextDeps } from "./
 
 export function createReductionInstructionCollector(params: {
   passToggles?: {
-    repeatedReadDedup?: boolean;
+    readStateCompaction?: boolean;
     toolPayloadTrim?: boolean;
     htmlSlimming?: boolean;
     execOutputTruncation?: boolean;
@@ -17,8 +17,8 @@ export function createReductionInstructionCollector(params: {
     segmentIds: string[];
     parameters?: Record<string, unknown>;
   }> = [];
-  const readByPath = new Map<string, string[]>();
-  const enableRepeatedReadDedup = passToggles?.repeatedReadDedup ?? true;
+  const readByKey = new Map<string, string[]>();
+  const enableReadStateCompaction = passToggles?.readStateCompaction ?? true;
   const enableToolPayloadTrim = passToggles?.toolPayloadTrim ?? true;
   const enableHtmlSlimming = passToggles?.htmlSlimming ?? true;
   const enableExecOutputTruncation = passToggles?.execOutputTruncation ?? true;
@@ -97,32 +97,34 @@ export function createReductionInstructionCollector(params: {
     }
   };
 
-  const recordReadSegment = (toolName: string, dataPath: string, fieldName?: string): void => {
-    if (toolName !== "read" || !dataPath || fieldName === "arguments") return;
-    const bucket = readByPath.get(dataPath) ?? [];
+  const recordReadSegment = (toolName: string, dataPath: string, readKey: string, fieldName?: string): void => {
+    if (toolName !== "read" || !dataPath || !readKey || fieldName === "arguments") return;
+    const bucket = readByKey.get(readKey) ?? [];
     bucket.push(fieldName ? fieldName : dataPath);
-    readByPath.set(dataPath, bucket);
+    readByKey.set(readKey, bucket);
   };
 
-  const recordReadSegmentId = (toolName: string, dataPath: string, segmentId: string, fieldName?: string): void => {
-    if (toolName !== "read" || !dataPath || fieldName === "arguments") return;
-    const bucket = readByPath.get(dataPath) ?? [];
+  const recordReadSegmentId = (
+    toolName: string,
+    dataPath: string,
+    readKey: string,
+    segmentId: string,
+    fieldName?: string,
+  ): void => {
+    if (toolName !== "read" || !dataPath || !readKey || fieldName === "arguments") return;
+    const bucket = readByKey.get(readKey) ?? [];
     bucket.push(segmentId);
-    readByPath.set(dataPath, bucket);
+    readByKey.set(readKey, bucket);
   };
 
-  const finalizeRepeatedReadInstructions = (): void => {
-    if (!enableRepeatedReadDedup) return;
-    for (const segmentIds of readByPath.values()) {
+  const finalizeReadStateInstructions = (): void => {
+    if (!enableReadStateCompaction) return;
+    for (const segmentIds of readByKey.values()) {
       if (segmentIds.length < 2) continue;
-      const [firstId, ...rest] = segmentIds;
-      for (const segmentId of rest) {
-        reductionInstructions.push({
-          strategy: "repeated_read_dedup",
-          segmentIds: [segmentId],
-          parameters: { firstReadSegmentId: firstId },
-        });
-      }
+      reductionInstructions.push({
+        strategy: "read_state_compaction",
+        segmentIds: [...segmentIds],
+      });
     }
   };
 
@@ -131,7 +133,7 @@ export function createReductionInstructionCollector(params: {
     addReductionInstructions,
     recordReadSegment,
     recordReadSegmentId,
-    finalizeRepeatedReadInstructions,
+    finalizeReadStateInstructions,
     stats: {
       get candidateBlocks() {
         return candidateBlocks;
@@ -143,7 +145,7 @@ export function createReductionInstructionCollector(params: {
         return enableToolPayloadTrim;
       },
       passToggles: {
-        repeatedReadDedup: enableRepeatedReadDedup,
+        readStateCompaction: enableReadStateCompaction,
         toolPayloadTrim: enableToolPayloadTrim,
         htmlSlimming: enableHtmlSlimming,
         execOutputTruncation: enableExecOutputTruncation,
