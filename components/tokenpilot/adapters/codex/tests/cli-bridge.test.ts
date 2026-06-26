@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -33,7 +33,7 @@ test("codex cli bridge exposes only the supported Codex command surface", async 
     assert.match(doctor.text, /TokenPilot Codex doctor:/);
 
     const visual = await handleCommand({ args: "visual" });
-    assert.equal(visual.text, "Codex visual is not implemented yet.");
+    assert.equal(visual.text, "No Codex TokenPilot session data found.");
 
     const report = await handleCommand({ args: "report" });
     assert.equal(report.text, "No TokenPilot session stats yet.");
@@ -52,6 +52,83 @@ test("codex cli bridge exposes only the supported Codex command surface", async 
 
     const unsupportedReductionPass = await handleCommand({ args: "reduction pass formatSlimming on" });
     assert.equal(unsupportedReductionPass.text, "Codex reduction supports only these passes: readStateCompaction, toolPayloadTrim, htmlSlimming, execOutputTruncation, agentsStartupOptimization");
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("codex cli bridge visual renders tracked session state", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-bridge-visual-"));
+  const originalHome = process.env.HOME;
+  process.env.HOME = dir;
+  try {
+    const stateDir = join(dir, ".codex", "tokenpilot-state", "tokenpilot");
+    await mkdir(join(stateDir, "session-state", "sessions"), { recursive: true });
+    await mkdir(join(stateDir, "session-state", "bindings"), { recursive: true });
+    await writeFile(
+      join(stateDir, "session-state", "latest.json"),
+      JSON.stringify({ sessionId: "session-1", updatedAt: "2026-06-26T10:00:00.000Z" }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      join(stateDir, "session-state", "sessions", "session-1.json"),
+      JSON.stringify({
+        sessionId: "session-1",
+        latestResponseId: "resp-3",
+        previousResponseId: "resp-2",
+        latestModel: "gpt-5.4-mini",
+        workspaceHint: "/repo/demo",
+        lastHookEvent: "PostToolUse",
+        lastToolName: "read",
+        lastToolInputChars: 64,
+        lastToolOutputChars: 512,
+        updatedAt: "2026-06-26T10:00:00.000Z",
+      }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      join(stateDir, "session-state", "bindings", "session-1.jsonl"),
+      [
+        JSON.stringify({
+          sessionId: "session-1",
+          responseId: "resp-2",
+          previousResponseId: "resp-1",
+          model: "gpt-5.4-mini",
+          requestChars: 1000,
+          responseChars: 500,
+          assistantChars: 210,
+          toolCallCount: 1,
+          stream: false,
+          updatedAt: "2026-06-26T09:59:00.000Z",
+        }),
+        JSON.stringify({
+          sessionId: "session-1",
+          responseId: "resp-3",
+          previousResponseId: "resp-2",
+          model: "gpt-5.4-mini",
+          requestChars: 1200,
+          responseChars: 720,
+          assistantChars: 330,
+          toolCallCount: 2,
+          stream: true,
+          updatedAt: "2026-06-26T10:00:00.000Z",
+        }),
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const { handleCommand } = createCodexCliBridge({ host: "codex" });
+    const visual = await handleCommand({ args: "visual" });
+    assert.match(visual.text, /TokenPilot Codex visual:/);
+    assert.match(visual.text, /session: session-1/);
+    assert.match(visual.text, /workspace: \/repo\/demo/);
+    assert.match(visual.text, /response chain: resp-3 -> resp-2/);
   } finally {
     if (originalHome === undefined) {
       delete process.env.HOME;

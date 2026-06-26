@@ -9,6 +9,7 @@ import {
   readDaemonStatus,
   startDaemon,
 } from "./daemon.js";
+import { upsertCodexSessionSnapshot } from "./session-state.js";
 import { appendTrace } from "./trace.js";
 import { dirname, join } from "node:path";
 
@@ -69,6 +70,17 @@ function extractToolEvent(input: Record<string, unknown>): {
   };
 }
 
+function workspaceHintFromEvent(input: Record<string, unknown>): string | undefined {
+  return findFirstString(input, [
+    "cwd",
+    "workspace",
+    "workspace_path",
+    "workspacePath",
+    "project_root",
+    "projectRoot",
+  ]);
+}
+
 function finishSuccess(): void {
   // Codex validates hook stdout against event-specific schemas. Empty stdout
   // with exit 0 is accepted as success for every hook event, so keep control
@@ -81,13 +93,26 @@ async function main() {
   const configPath = process.env.TOKENPILOT_CODEX_CONFIG ?? defaultTokenPilotConfigPath();
   const codexConfigPath = process.env.CODEX_CONFIG_PATH ?? defaultCodexConfigPath();
   const config = await loadTokenPilotCodexConfig(configPath);
+  const sessionId = stringValue(event.session_id);
+  const workspaceHint = workspaceHintFromEvent(event);
+  const tool = extractToolEvent(event);
   const common = {
     hookEventName,
-    codexSessionId: stringValue(event.session_id) ?? null,
+    codexSessionId: sessionId ?? null,
     transcriptPath: stringValue(event.transcript_path) ?? null,
-    cwd: stringValue(event.cwd) ?? null,
+    cwd: workspaceHint ?? null,
     model: stringValue(event.model) ?? null,
   };
+
+  if (sessionId) {
+    await upsertCodexSessionSnapshot(config.stateDir, sessionId, {
+      workspaceHint,
+      lastHookEvent: hookEventName,
+      lastToolName: tool.toolName ?? undefined,
+      lastToolInputChars: tool.toolInputChars,
+      lastToolOutputChars: tool.toolOutputChars,
+    });
+  }
 
   if (hookEventName === "SessionStart") {
     const defaultCliPath = join(dirname(process.argv[1]), "cli.js");
@@ -106,7 +131,6 @@ async function main() {
   }
 
   if (hookEventName === "PostToolUse") {
-    const tool = extractToolEvent(event);
     await appendTrace(config.stateDir, {
       stage: "codex_hook_post_tool_use",
       ...common,
@@ -117,7 +141,6 @@ async function main() {
   }
 
   if (hookEventName === "PreToolUse") {
-    const tool = extractToolEvent(event);
     await appendTrace(config.stateDir, {
       stage: "codex_hook_pre_tool_use",
       ...common,

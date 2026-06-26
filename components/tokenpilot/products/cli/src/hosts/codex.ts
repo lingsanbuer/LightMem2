@@ -1,5 +1,5 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import type {
   TokenPilotProductSurfaceConfigAdapter,
   TokenPilotProductSurfaceHostBridge,
@@ -24,26 +24,9 @@ import {
   codexProductSurfaceConfigAdapter,
   resolveCodexStateDir,
 } from "../../../../adapters/codex/src/host-config-adapter.js";
-
-type CodexUxEffectRecord = {
-  sessionId: string;
-  countMode?: "litellm_tokens" | "chars";
-  details?: {
-    requestSavedCount?: number;
-    responseSavedCount?: number;
-  };
-};
-
-type CodexUxSessionAggregate = {
-  turns: number;
-  latestCountMode?: "litellm_tokens" | "chars";
-  tokenOptimizedTurns: number;
-  tokenSavedCount: number;
-  avgSavedTokensPerOptimizedTurn: number;
-  charOptimizedTurns: number;
-  charSavedCount: number;
-  avgSavedCharsPerOptimizedTurn: number;
-};
+import { resolveLatestCodexSessionId } from "../../../../adapters/codex/src/session-state.js";
+import { renderCodexSessionVisual } from "../../../../adapters/codex/src/session-visual.js";
+import { readCodexUxSessionAggregate, readLatestCodexUxEffect } from "../../../../adapters/codex/src/ux-effects.js";
 
 const CODEX_REDUCTION_PASS_NAMES = [
   "readStateCompaction",
@@ -56,23 +39,6 @@ const CODEX_REDUCTION_PASS_NAMES = [
 function normalizeSessionId(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
   return text || undefined;
-}
-
-function latestUxPath(stateDir: string): string {
-  return join(stateDir, "ux-effects", "latest.json");
-}
-
-function sessionUxPath(stateDir: string, sessionId: string): string {
-  return join(stateDir, "ux-effects", "sessions", `${sessionId}.json`);
-}
-
-async function readJsonFile<T>(path: string): Promise<T | null> {
-  try {
-    const raw = await readFile(path, "utf8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
 }
 
 async function loadConfig(): Promise<Record<string, unknown>> {
@@ -91,8 +57,8 @@ async function maybeResolveLatestSessionId(): Promise<string | undefined> {
   const currentConfig = await loadConfig();
   const stateDir = resolveCodexStateDir(currentConfig);
   if (!stateDir) return undefined;
-  const latest = await readJsonFile<CodexUxEffectRecord>(latestUxPath(stateDir));
-  return normalizeSessionId(latest?.sessionId);
+  return normalizeSessionId(await resolveLatestCodexSessionId(stateDir))
+    ?? normalizeSessionId((await readLatestCodexUxEffect(stateDir))?.sessionId);
 }
 
 function splitArgs(raw: string): string[] {
@@ -251,9 +217,14 @@ export function createCodexCliBridge(target: {
         text: formatCodexDoctorReport(report),
       };
     },
-    async handleVisual() {
+    async handleVisual(currentConfig) {
+      const stateDir = resolveCodexStateDir(currentConfig);
+      if (!stateDir) {
+        return { text: "TokenPilot stateDir is not configured." };
+      }
+      const sessionId = normalizeSessionId(target.sessionId) ?? await resolveLatestCodexSessionId(stateDir);
       return {
-        text: "Codex visual is not implemented yet.",
+        text: await renderCodexSessionVisual(stateDir, sessionId),
       };
     },
     async handleReport(_ctx, currentConfig) {
@@ -261,12 +232,14 @@ export function createCodexCliBridge(target: {
       if (!stateDir) {
         return { text: "TokenPilot stateDir is not configured." };
       }
-      const latest = await readJsonFile<CodexUxEffectRecord>(latestUxPath(stateDir));
-      const sessionId = normalizeSessionId(target.sessionId) ?? normalizeSessionId(latest?.sessionId);
+      const latest = await readLatestCodexUxEffect(stateDir);
+      const sessionId = normalizeSessionId(target.sessionId)
+        ?? normalizeSessionId(latest?.sessionId)
+        ?? await resolveLatestCodexSessionId(stateDir);
       if (!sessionId) {
         return { text: "No TokenPilot session stats yet." };
       }
-      const aggregate = await readJsonFile<CodexUxSessionAggregate>(sessionUxPath(stateDir, sessionId));
+      const aggregate = await readCodexUxSessionAggregate(stateDir, sessionId);
       if (!aggregate) {
         return { text: `No TokenPilot savings recorded yet for session ${sessionId}.` };
       }

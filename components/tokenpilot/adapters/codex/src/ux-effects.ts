@@ -98,3 +98,24 @@ export async function recordCodexUxEffect(
     "utf8",
   );
 }
+
+export async function readLatestCodexUxEffect(stateDir: string): Promise<CodexUxEffectRecord | null> {
+  try {
+    return JSON.parse(await readFile(latestUxEffectPath(stateDir), "utf8")) as CodexUxEffectRecord;
+  } catch {
+    return null;
+  }
+}
+
+export async function readCodexUxSessionAggregate(
+  stateDir: string,
+  sessionId: string,
+): Promise<CodexUxSessionAggregate | null> {
+  try {
+    return JSON.parse(
+      await readFile(sessionUxAggregatePath(stateDir, sessionId), "utf8"),
+    ) as CodexUxSessionAggregate;
+  } catch {
+    return null;
+  }
+}

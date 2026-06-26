@@ -11,6 +11,7 @@ import {
 import type { TokenPilotCodexLogger } from "./logger.js";
 import {
   createCodexResponsesPayloadCodec,
+  extractResponsesInputText,
   syncPayloadFromEnvelope,
 } from "./responses-codec.js";
 import {
@@ -22,6 +23,11 @@ import {
   requestUpstreamResponses,
   requestUpstreamResponsesStream,
 } from "./upstream.js";
+import {
+  appendCodexRecentTurnBinding,
+  upsertCodexSessionSnapshot,
+} from "./session-state.js";
+import { snapshotCodexResponsesStream } from "./stream-observer.js";
 import { appendTrace } from "./trace.js";
 import { recordCodexUxEffect } from "./ux-effects.js";
 
@@ -128,6 +134,8 @@ export async function startCodexResponsesProxy(params: {
         },
       });
       syncPayloadFromEnvelope(payload, prepared.envelope, codec);
+      normalizeResponsesInputForUpstream(payload?.input);
+      const requestText = extractResponsesInputText(payload?.input);
 
       if (reductionSummary && reductionSummary.savedChars > 0) {
         await recordCodexUxEffect(config.stateDir, {
@@ -165,7 +173,15 @@ export async function startCodexResponsesProxy(params: {
         const upstreamResp = await requestUpstreamResponsesStream({ upstream, payload, inboundAuthorization: authorization });
         res.statusCode = upstreamResp.status;
         setForwardHeaders(res, upstreamResp.headers, "text/event-stream; charset=utf-8");
+        const streamChunks: Buffer[] = [];
+        upstreamResp.stream.on("data", (chunk) => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+          streamChunks.push(buffer);
+          res.write(buffer);
+        });
         upstreamResp.stream.once("end", () => {
+          const rawStreamText = Buffer.concat(streamChunks).toString("utf8");
+          const snapshot = snapshotCodexResponsesStream(rawStreamText);
           void appendTrace(config.stateDir, {
             stage: "proxy_after_call",
             sessionId,
@@ -173,7 +189,28 @@ export async function startCodexResponsesProxy(params: {
             status: upstreamResp.status,
             stream: true,
             completed: true,
+            responseChars: rawStreamText.length,
+            assistantChars: snapshot.assistantText.length,
+            responseId: snapshot.responseId ?? null,
+            previousResponseId: snapshot.previousResponseId ?? null,
           });
+          void upsertCodexSessionSnapshot(config.stateDir, sessionId, {
+            latestResponseId: snapshot.responseId,
+            previousResponseId: snapshot.previousResponseId,
+            latestModel: model,
+          });
+          void appendCodexRecentTurnBinding(config.stateDir, {
+            sessionId,
+            responseId: snapshot.responseId,
+            previousResponseId: snapshot.previousResponseId,
+            model,
+            requestChars: requestText.length,
+            responseChars: rawStreamText.length,
+            assistantChars: snapshot.assistantText.length,
+            stream: true,
+            updatedAt: new Date().toISOString(),
+          });
+          res.end();
         });
         upstreamResp.stream.once("error", (err) => {
           void appendTrace(config.stateDir, {
@@ -185,18 +222,53 @@ export async function startCodexResponsesProxy(params: {
             completed: false,
             error: err instanceof Error ? err.message : String(err),
           });
+          if (!res.destroyed) {
+            res.destroy(err instanceof Error ? err : new Error(String(err)));
+          }
         });
-        upstreamResp.stream.pipe(res);
         return;
       }
 
       const upstreamResp = await requestUpstreamResponses({ upstream, payload, inboundAuthorization: authorization });
+      let responseId: string | undefined;
+      let previousResponseId: string | undefined;
+      let assistantChars = 0;
+      let toolCallCount = 0;
+      try {
+        const decoded = codec.decodeResponse(JSON.parse(upstreamResp.text), prepared.envelope);
+        responseId = typeof decoded.metadata?.responseId === "string" ? decoded.metadata.responseId : undefined;
+        previousResponseId = typeof decoded.metadata?.previousResponseId === "string" ? decoded.metadata.previousResponseId : undefined;
+        assistantChars = decoded.assistantText?.length ?? 0;
+        toolCallCount = decoded.toolCalls?.length ?? 0;
+      } catch {
+        // Some upstream error payloads may not match the expected Responses shape.
+      }
+      await upsertCodexSessionSnapshot(config.stateDir, sessionId, {
+        latestResponseId: responseId,
+        previousResponseId,
+        latestModel: model,
+      });
+      await appendCodexRecentTurnBinding(config.stateDir, {
+        sessionId,
+        responseId,
+        previousResponseId,
+        model,
+        requestChars: requestText.length,
+        responseChars: upstreamResp.text.length,
+        assistantChars,
+        toolCallCount,
+        stream: false,
+        updatedAt: new Date().toISOString(),
+      });
       await appendTrace(config.stateDir, {
         stage: "proxy_after_call",
         sessionId,
         model,
         status: upstreamResp.status,
         responseChars: upstreamResp.text.length,
+        assistantChars,
+        responseId: responseId ?? null,
+        previousResponseId: previousResponseId ?? null,
       });
       res.statusCode = upstreamResp.status;
       setForwardHeaders(res, upstreamResp.headers, "application/json; charset=utf-8");
