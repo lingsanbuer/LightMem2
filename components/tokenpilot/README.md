@@ -48,8 +48,12 @@ In the current public repo:
   - the current production host adapter for OpenClaw
 - `adapters/codex/`
   - Codex CLI adapter with hook-based integration and local Responses proxy
+- `adapters/claude-code/`
+  - Claude Code adapter with gateway routing and MCP-backed recovery
 - `products/cli/`
   - standalone `lightmem2` CLI surface for hosts without native slash commands
+- `products/mcp/`
+  - shared stdio MCP surface for internal archive recovery
 
 Adapter development notes live in:
 
@@ -92,7 +96,7 @@ Current implementation status:
 
 - `OpenClaw`: production adapter
 - `Codex CLI`: available through the standalone CLI + Codex hook adapter
-- `Claude Code`: planned
+- `Claude Code`: gateway-first adapter with stable-prefix, reduction, and MCP recovery
 
 ## Runtime Commands
 

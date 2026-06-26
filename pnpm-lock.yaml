@@ -18,6 +18,25 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  components/tokenpilot/adapters/claude-code:
+    dependencies:
+      '@tokenpilot/host-adapter':
+        specifier: workspace:*
+        version: link:../../packages/host-adapter
+      '@tokenpilot/mcp':
+        specifier: workspace:*
+        version: link:../../products/mcp
+    devDependencies:
+      esbuild:
+        specifier: ^0.25.10
+        version: 0.25.12
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   components/tokenpilot/adapters/codex:
     dependencies:
       '@tokenpilot/decision':
@@ -29,6 +48,9 @@ importers:
       '@tokenpilot/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@tokenpilot/mcp':
+        specifier: workspace:*
+        version: link:../../products/mcp
       '@tokenpilot/runtime-core':
         specifier: workspace:*
         version: link:../../packages/runtime-core
@@ -138,6 +160,22 @@ importers:
       '@tokenpilot/product-surface':
         specifier: workspace:*
         version: link:../../packages/product-surface
+    devDependencies:
+      esbuild:
+        specifier: ^0.25.10
+        version: 0.25.12
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  components/tokenpilot/products/mcp:
+    dependencies:
+      '@tokenpilot/runtime-core':
+        specifier: workspace:*
+        version: link:../../packages/runtime-core
     devDependencies:
       esbuild:
         specifier: ^0.25.10

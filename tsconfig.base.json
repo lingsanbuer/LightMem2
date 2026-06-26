@@ -32,6 +32,9 @@
             ],
             "@tokenpilot/product-surface": [
                 "components/tokenpilot/packages/product-surface/src/index.ts"
+            ],
+            "@tokenpilot/mcp": [
+                "components/tokenpilot/products/mcp/src/index.ts"
             ]
         },
         "types": [
