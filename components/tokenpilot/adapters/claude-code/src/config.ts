@@ -16,6 +16,9 @@ export type TokenPilotClaudeCodeConfig = {
   upstreamBaseUrl: string;
   upstreamApiKey?: string;
   upstreamModel?: string;
+  hooks: {
+    dynamicContextTarget: "developer" | "user";
+  };
   modules: {
     stabilizer: boolean;
     reduction: boolean;
@@ -104,6 +107,7 @@ export function proxyBaseUrlForPort(port: number): string {
 
 export function normalizeTokenPilotClaudeCodeConfig(raw: unknown): TokenPilotClaudeCodeConfig {
   const obj = asRecord(raw);
+  const hooks = asRecord(obj.hooks);
   const modules = asRecord(obj.modules);
   const reduction = asRecord(obj.reduction);
   const passes = asRecord(reduction.passes);
@@ -117,6 +121,9 @@ export function normalizeTokenPilotClaudeCodeConfig(raw: unknown): TokenPilotCla
     upstreamBaseUrl: (stringValue(obj.upstreamBaseUrl) ?? defaultClaudeUpstreamBaseUrl()).replace(/\/+$/, ""),
     upstreamApiKey: stringValue(obj.upstreamApiKey),
     upstreamModel: stringValue(obj.upstreamModel),
+    hooks: {
+      dynamicContextTarget: hooks.dynamicContextTarget === "user" ? "user" : "developer",
+    },
     modules: {
       stabilizer: boolValue(modules.stabilizer, true),
       reduction: boolValue(modules.reduction, true),

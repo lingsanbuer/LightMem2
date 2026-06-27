@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   TOKENPILOT_MCP_SERVER_NAME,
   inspectClaudeMcpServerConfig,
@@ -24,6 +25,10 @@ export type ClaudeCodeDoctorReport = {
   proxyHealthy: boolean;
   upstreamBaseUrl: string;
   mcpInstalled: boolean;
+  mcpStateDirMatches: boolean;
+  stateDirExists: boolean;
+  sessionStateAvailable: boolean;
+  uxEffectsAvailable: boolean;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -50,11 +55,15 @@ export function formatClaudeCodeDoctorReport(report: ClaudeCodeDoctorReport): st
     `- stateDir: ${report.stateDir}`,
     `- settings installed: ${report.settingsInstalled ? "yes" : "no"}`,
     `- recovery MCP installed: ${report.mcpInstalled ? "yes" : "no"}`,
+    `- recovery MCP stateDir matches: ${report.mcpStateDirMatches ? "yes" : "no"}`,
     `- routed via gateway: ${report.routedViaGateway ? "yes" : "no"}`,
     `- tool search enabled: ${report.toolSearchEnabled ? "yes" : "no"}`,
     `- proxy healthy: ${report.proxyHealthy ? "yes" : "no"}`,
     `- proxy base URL: ${report.proxyBaseUrl}`,
     `- upstream base URL: ${report.upstreamBaseUrl}`,
+    `- state dir exists: ${report.stateDirExists ? "yes" : "no"}`,
+    `- session state available: ${report.sessionStateAvailable ? "yes" : "no"}`,
+    `- ux effects available: ${report.uxEffectsAvailable ? "yes" : "no"}`,
   ].join("\n");
 }
 
@@ -70,6 +79,7 @@ export async function inspectClaudeCodeDoctor(params: {
   let toolSearchEnabled = false;
   let mcpConfigPath = params.mcpConfigPath;
   let mcpInstalled = false;
+  let mcpStateDirMatches = false;
 
   if (existsSync(params.settingsPath)) {
     settingsInstalled = true;
@@ -88,9 +98,14 @@ export async function inspectClaudeCodeDoctor(params: {
     if (inspected.installed) {
       mcpInstalled = true;
       mcpConfigPath = candidate;
+      mcpStateDirMatches = inspected.env?.TOKENPILOT_STATE_DIR === params.config.stateDir;
       break;
     }
   }
+
+  const stateDirExists = existsSync(params.config.stateDir);
+  const sessionStateAvailable = existsSync(join(params.config.stateDir, "session-state", "latest.json"));
+  const uxEffectsAvailable = existsSync(join(params.config.stateDir, "ux-effects", "latest.json"));
 
   return {
     settingsPath: params.settingsPath,
@@ -100,9 +115,13 @@ export async function inspectClaudeCodeDoctor(params: {
     proxyBaseUrl,
     settingsInstalled,
     mcpInstalled,
+    mcpStateDirMatches,
     routedViaGateway,
     toolSearchEnabled,
     proxyHealthy: await checkHealth(proxyBaseUrl),
     upstreamBaseUrl: params.config.upstreamBaseUrl,
+    stateDirExists,
+    sessionStateAvailable,
+    uxEffectsAvailable,
   };
 }

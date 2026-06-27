@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -28,8 +28,12 @@ test("inspectClaudeCodeDoctor reports missing settings honestly", async () => {
     });
     assert.equal(report.settingsInstalled, false);
     assert.equal(report.mcpInstalled, false);
+    assert.equal(report.mcpStateDirMatches, false);
     assert.equal(report.routedViaGateway, false);
     assert.equal(report.toolSearchEnabled, false);
+    assert.equal(report.stateDirExists, false);
+    assert.equal(report.sessionStateAvailable, false);
+    assert.equal(report.uxEffectsAvailable, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -39,6 +43,7 @@ test("inspectClaudeCodeDoctor detects gateway routing from settings env", async 
   const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-doctor-env-"));
   try {
     const proxyPort = 18778;
+    const stateDir = join(dir, "state");
     const settingsPath = join(dir, "settings.json");
     const mcpConfigPath = join(dir, ".claude.json");
     const tokenPilotConfigPath = join(dir, "tokenpilot.json");
@@ -54,15 +59,19 @@ test("inspectClaudeCodeDoctor detects gateway routing from settings env", async 
           command: process.execPath,
           args: ["/tmp/server.js"],
           env: {
-            TOKENPILOT_STATE_DIR: join(dir, "state"),
+            TOKENPILOT_STATE_DIR: stateDir,
           },
         },
       },
     }, null, 2)}\n`, "utf8");
+    await mkdir(join(stateDir, "session-state"), { recursive: true });
+    await mkdir(join(stateDir, "ux-effects"), { recursive: true });
+    await writeFile(join(stateDir, "session-state", "latest.json"), "{\"sessionId\":\"sess-1\"}\n", "utf8");
+    await writeFile(join(stateDir, "ux-effects", "latest.json"), "{\"sessionId\":\"sess-1\"}\n", "utf8");
 
     const report = await inspectClaudeCodeDoctor({
       config: normalizeTokenPilotClaudeCodeConfig({
-        stateDir: join(dir, "state"),
+        stateDir,
         proxyPort,
       }),
       mcpConfigPath,
@@ -71,8 +80,12 @@ test("inspectClaudeCodeDoctor detects gateway routing from settings env", async 
     });
     assert.equal(report.settingsInstalled, true);
     assert.equal(report.mcpInstalled, true);
+    assert.equal(report.mcpStateDirMatches, true);
     assert.equal(report.routedViaGateway, true);
     assert.equal(report.toolSearchEnabled, true);
+    assert.equal(report.stateDirExists, true);
+    assert.equal(report.sessionStateAvailable, true);
+    assert.equal(report.uxEffectsAvailable, true);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

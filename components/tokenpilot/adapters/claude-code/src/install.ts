@@ -28,6 +28,9 @@ export async function installClaudeCodeTokenPilot(params?: {
   mcpConfigPath: string;
   tokenPilotConfigPath: string;
   proxyBaseUrl: string;
+  stateDir: string;
+  settingsBackedUp: boolean;
+  mcpConfigBackedUp: boolean;
   toolSearchEnvName: string;
   toolSearchEnvValue: string;
   mcpServerName: string;
@@ -56,6 +59,7 @@ export async function installClaudeCodeTokenPilot(params?: {
   };
 
   await mkdir(dirname(settingsPath), { recursive: true });
+  const settingsBackedUp = existsSync(settingsPath);
   if (existsSync(settingsPath)) {
     await copyFile(settingsPath, `${settingsPath}.tokenpilot.bak`);
   }
@@ -74,6 +78,7 @@ export async function installClaudeCodeTokenPilot(params?: {
     },
   };
   await mkdir(dirname(mcpConfigPath), { recursive: true });
+  const mcpConfigBackedUp = existsSync(mcpConfigPath);
   if (existsSync(mcpConfigPath)) {
     await copyFile(mcpConfigPath, `${mcpConfigPath}.tokenpilot.bak`);
   }
@@ -83,6 +88,9 @@ export async function installClaudeCodeTokenPilot(params?: {
     mcpConfigPath,
     tokenPilotConfigPath,
     proxyBaseUrl: proxyBaseUrlForPort(config.proxyPort),
+    stateDir: config.stateDir,
+    settingsBackedUp,
+    mcpConfigBackedUp,
     toolSearchEnvName: CLAUDE_TOOL_SEARCH_ENV,
     toolSearchEnvValue: CLAUDE_TOOL_SEARCH_DEFAULT,
     mcpServerName: mcpServer.serverName,

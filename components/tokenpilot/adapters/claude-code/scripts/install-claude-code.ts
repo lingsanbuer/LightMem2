@@ -5,8 +5,11 @@ async function main() {
   console.log([
     "TokenPilot Claude Code install complete:",
     `- settings: ${result.settingsPath}`,
+    `- settings backup created: ${result.settingsBackedUp ? "yes" : "no"}`,
     `- mcp config: ${result.mcpConfigPath}`,
+    `- mcp config backup created: ${result.mcpConfigBackedUp ? "yes" : "no"}`,
     `- tokenpilot config: ${result.tokenPilotConfigPath}`,
+    `- state dir: ${result.stateDir}`,
     `- proxy base URL: ${result.proxyBaseUrl}`,
     `- tool search env: ${result.toolSearchEnvName}=${result.toolSearchEnvValue}`,
     `- recovery MCP server: ${result.mcpServerName}`,
