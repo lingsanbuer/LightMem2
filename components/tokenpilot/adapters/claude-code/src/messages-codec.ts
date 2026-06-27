@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { randomUUID } from "node:crypto";
 import type {
   HostMessage,
   HostPayloadCodec,
@@ -14,9 +15,9 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function normalizeSessionId(value: unknown): string {
+function normalizeSessionId(value: unknown): string | undefined {
   const text = String(value ?? "").trim();
-  return text || "claude-code-session";
+  return text || undefined;
 }
 
 function normalizeRole(role: unknown): "system" | "user" | "assistant" | "tool" {
@@ -34,6 +35,18 @@ function extractTextFromBlock(block: unknown): string {
   if (typeof obj.input === "string") return obj.input;
   if (typeof obj.output === "string") return obj.output;
   return "";
+}
+
+function ensureSyntheticSessionId(payload: Record<string, unknown>): string {
+  const metadata = asRecord(payload.metadata);
+  const existing = normalizeSessionId(metadata.tokenpilotSyntheticSessionId);
+  if (existing) return existing;
+  const next = `claude-synth-${randomUUID()}`;
+  payload.metadata = {
+    ...metadata,
+    tokenpilotSyntheticSessionId: next,
+  };
+  return next;
 }
 
 function anthropicMessageToHostMessage(message: unknown): HostMessage {
@@ -138,7 +151,7 @@ export function createClaudeCodeSessionResolver(): HostSessionResolver {
           ?? metadata.sessionId
           ?? metadata.threadId
           ?? payload.id,
-      );
+      ) ?? ensureSyntheticSessionId(payload);
       return {
         host: {
           hostId: "claude-code",

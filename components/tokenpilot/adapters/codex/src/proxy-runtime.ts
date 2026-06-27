@@ -11,6 +11,7 @@ import {
 } from "./config.js";
 import type { TokenPilotCodexLogger } from "./logger.js";
 import {
+  createCodexSessionResolver,
   createCodexResponsesPayloadCodec,
   extractResponsesInputText,
   syncPayloadFromEnvelope,
@@ -26,6 +27,8 @@ import {
 } from "./upstream.js";
 import {
   appendCodexRecentTurnBinding,
+  indexCodexResponseSession,
+  resolveCodexSessionIdByResponseId,
   upsertCodexSessionSnapshot,
 } from "./session-state.js";
 import { snapshotCodexResponsesStream } from "./stream-observer.js";
@@ -91,7 +94,6 @@ export async function startCodexResponsesProxy(params: {
   }));
   await mkdir(config.stateDir, { recursive: true });
   const upstream = await resolveUpstreamProvider(config, params.codexConfigPath ?? defaultCodexConfigPath());
-  const codec = createCodexResponsesPayloadCodec();
   const server = createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/health") {
@@ -111,6 +113,15 @@ export async function startCodexResponsesProxy(params: {
       const body = await readRequestBody(req);
       const payload = JSON.parse(body);
       normalizeResponsesInputForUpstream(payload?.input);
+      const mappedPreviousSessionId =
+        typeof payload?.previous_response_id === "string"
+          ? await resolveCodexSessionIdByResponseId(config.stateDir, payload.previous_response_id)
+          : undefined;
+      const codec = createCodexResponsesPayloadCodec(
+        createCodexSessionResolver({
+          mappedPreviousSessionId,
+        }),
+      );
       let envelope = codec.decodeRequest(payload);
       const inboundModel = envelope.model;
       const model = inboundModel.startsWith("tokenpilot/")
@@ -206,6 +217,9 @@ export async function startCodexResponsesProxy(params: {
             previousResponseId: snapshot.previousResponseId,
             latestModel: model,
           });
+          if (typeof snapshot.responseId === "string" && snapshot.responseId) {
+            void indexCodexResponseSession(config.stateDir, snapshot.responseId, sessionId);
+          }
           void appendCodexRecentTurnBinding(config.stateDir, {
             sessionId,
             responseId: snapshot.responseId,
@@ -255,6 +269,9 @@ export async function startCodexResponsesProxy(params: {
         previousResponseId,
         latestModel: model,
       });
+      if (typeof responseId === "string" && responseId) {
+        await indexCodexResponseSession(config.stateDir, responseId, sessionId);
+      }
       await appendCodexRecentTurnBinding(config.stateDir, {
         sessionId,
         responseId,

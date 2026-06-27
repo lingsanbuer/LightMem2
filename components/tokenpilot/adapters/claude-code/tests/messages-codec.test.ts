@@ -60,3 +60,36 @@ test("codec maps Messages request and response shapes", () => {
   assert.deepEqual(response.toolCalls?.[0]?.argumentsJson, { cmd: "pwd" });
   assert.deepEqual(response.usage, { input_tokens: 10, output_tokens: 5 });
 });
+
+test("claude session resolver synthesizes a per-request session id when host session markers are absent", () => {
+  const codec = createClaudeMessagesPayloadCodec();
+  const payloadA: any = {
+    model: "claude-sonnet-4-6",
+    stream: false,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "hi a" }],
+      },
+    ],
+  };
+  const payloadB: any = {
+    model: "claude-sonnet-4-6",
+    stream: false,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "hi b" }],
+      },
+    ],
+  };
+
+  const requestA = codec.decodeRequest(payloadA);
+  const requestB = codec.decodeRequest(payloadB);
+
+  assert.match(requestA.session.sessionId, /^claude-synth-/);
+  assert.match(requestB.session.sessionId, /^claude-synth-/);
+  assert.notEqual(requestA.session.sessionId, requestB.session.sessionId);
+  assert.equal((payloadA.metadata as Record<string, unknown>)?.tokenpilotSyntheticSessionId, requestA.session.sessionId);
+  assert.equal((payloadB.metadata as Record<string, unknown>)?.tokenpilotSyntheticSessionId, requestB.session.sessionId);
+});

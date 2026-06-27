@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { randomUUID } from "node:crypto";
 import type {
   HostPayloadCodec,
   HostRequestEnvelope,
@@ -7,9 +8,9 @@ import type {
   HostSessionResolver,
 } from "@tokenpilot/host-adapter";
 
-function normalizeSessionId(value: unknown): string {
+function normalizeSessionId(value: unknown): string | undefined {
   const text = String(value ?? "").trim();
-  return text || "codex-proxy-session";
+  return text || undefined;
 }
 
 function normalizeMessageRole(role: unknown): "system" | "user" | "assistant" | "tool" {
@@ -27,7 +28,21 @@ function metadataOf(payload: any): Record<string, unknown> {
     : {};
 }
 
-export function createCodexSessionResolver(): HostSessionResolver {
+function ensureSyntheticSessionId(payload: any): string {
+  const metadata = metadataOf(payload);
+  const existing = normalizeSessionId(metadata.tokenpilotSyntheticSessionId);
+  if (existing) return existing;
+  const next = `codex-synth-${randomUUID()}`;
+  payload.metadata = {
+    ...metadata,
+    tokenpilotSyntheticSessionId: next,
+  };
+  return next;
+}
+
+export function createCodexSessionResolver(params?: {
+  mappedPreviousSessionId?: string;
+}): HostSessionResolver {
   return {
     resolve(_headers, rawPayload): HostSessionContext {
       const payload = rawPayload && typeof rawPayload === "object" ? rawPayload as any : {};
@@ -36,9 +51,8 @@ export function createCodexSessionResolver(): HostSessionResolver {
         metadata.tokenpilotSessionId
           ?? metadata.sessionId
           ?? metadata.threadId
-          ?? payload.previous_response_id
-          ?? payload.prompt_cache_key,
-      );
+          ?? params?.mappedPreviousSessionId,
+      ) ?? ensureSyntheticSessionId(payload);
       return {
         host: {
           hostId: "codex",

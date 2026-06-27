@@ -32,6 +32,12 @@ type LatestCodexSessionRef = {
   updatedAt: string;
 };
 
+type CodexResponseSessionRef = {
+  responseId: string;
+  sessionId: string;
+  updatedAt: string;
+};
+
 function encodeSessionId(sessionId: string): string {
   return encodeURIComponent(sessionId);
 }
@@ -46,6 +52,10 @@ function recentTurnBindingsPath(stateDir: string, sessionId: string): string {
 
 function latestSessionPath(stateDir: string): string {
   return join(stateDir, "session-state", "latest.json");
+}
+
+function responseSessionPath(stateDir: string, responseId: string): string {
+  return join(stateDir, "session-state", "responses", `${encodeURIComponent(responseId)}.json`);
 }
 
 async function readJsonFile<T>(path: string): Promise<T | null> {
@@ -112,6 +122,32 @@ export async function appendCodexRecentTurnBinding(
 ): Promise<void> {
   await appendJsonl(recentTurnBindingsPath(stateDir, binding.sessionId), binding);
   await markLatestSession(stateDir, binding.sessionId, binding.updatedAt);
+}
+
+export async function indexCodexResponseSession(
+  stateDir: string,
+  responseId: string,
+  sessionId: string,
+): Promise<void> {
+  const normalizedResponseId = responseId.trim();
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedResponseId || !normalizedSessionId) return;
+  await writeJsonFileAtomic(responseSessionPath(stateDir, normalizedResponseId), {
+    responseId: normalizedResponseId,
+    sessionId: normalizedSessionId,
+    updatedAt: new Date().toISOString(),
+  } satisfies CodexResponseSessionRef);
+}
+
+export async function resolveCodexSessionIdByResponseId(
+  stateDir: string,
+  responseId: string,
+): Promise<string | undefined> {
+  const normalizedResponseId = responseId.trim();
+  if (!normalizedResponseId) return undefined;
+  const record = await readJsonFile<CodexResponseSessionRef>(responseSessionPath(stateDir, normalizedResponseId));
+  const sessionId = typeof record?.sessionId === "string" ? record.sessionId.trim() : "";
+  return sessionId || undefined;
 }
 
 export async function loadCodexRecentTurnBindings(

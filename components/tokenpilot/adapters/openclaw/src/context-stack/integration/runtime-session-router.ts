@@ -84,6 +84,24 @@ export function createRuntimeSessionRouter(params: {
     return undefined;
   };
 
+  const hasContinuationHints = (payload: any): boolean => {
+    const metadata = payload?.metadata && typeof payload.metadata === "object" ? payload.metadata : null;
+    const candidates = [
+      payload?.previous_response_id,
+      payload?.previousResponseId,
+      payload?.prompt_cache_key,
+      payload?.promptCacheKey,
+      metadata?.previous_response_id,
+      metadata?.previousResponseId,
+      metadata?.prompt_cache_key,
+      metadata?.promptCacheKey,
+    ];
+    for (const candidate of candidates) {
+      if (String(candidate ?? "").trim()) return true;
+    }
+    return false;
+  };
+
   const resolveTurnBinding = (userMessage: string): RecentTurnBinding | null => {
     const normalizedMessage = deps.normalizeTurnBindingMessage(String(userMessage ?? "").trim());
     if (!normalizedMessage) return null;
@@ -113,6 +131,7 @@ export function createRuntimeSessionRouter(params: {
     const lastUser = deps.findLastUserItem(payload?.input);
     const userBoundSessionId = resolveBoundUpstreamSessionId(deps.extractItemText(lastUser?.userItem));
     if (userBoundSessionId) return userBoundSessionId;
+    if (!hasContinuationHints(payload)) return undefined;
     return topology.getLatestUpstreamSessionId() ?? undefined;
   };
 

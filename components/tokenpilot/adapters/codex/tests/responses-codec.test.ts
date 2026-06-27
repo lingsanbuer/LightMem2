@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createCodexSessionResolver,
   createCodexResponsesPayloadCodec,
   extractResponsesInputText,
   syncPayloadFromEnvelope,
@@ -42,6 +43,45 @@ test("codec normalizes developer role on decode and restores it on encode", () =
   assert.equal(encoded.prompt_cache_key, "pk-1");
   assert.equal(encoded.previous_response_id, "resp-prev");
   assert.equal(encoded.input[0].metadata, undefined);
+});
+
+test("codex session resolver uses mapped previous response session instead of raw previous_response_id", () => {
+  const codec = createCodexResponsesPayloadCodec(
+    createCodexSessionResolver({
+      mappedPreviousSessionId: "session-from-index",
+    }),
+  );
+  const envelope = codec.decodeRequest({
+    model: "tokenpilot/gpt-5.4-mini",
+    stream: false,
+    previous_response_id: "resp-prev",
+    input: [{ role: "user", content: "continue" }],
+  });
+
+  assert.equal(envelope.session.sessionId, "session-from-index");
+});
+
+test("codex session resolver synthesizes a per-request session id when host session markers are absent", () => {
+  const codec = createCodexResponsesPayloadCodec();
+  const payloadA: any = {
+    model: "tokenpilot/gpt-5.4-mini",
+    stream: false,
+    input: [{ role: "user", content: "turn a" }],
+  };
+  const payloadB: any = {
+    model: "tokenpilot/gpt-5.4-mini",
+    stream: false,
+    input: [{ role: "user", content: "turn b" }],
+  };
+
+  const envelopeA = codec.decodeRequest(payloadA);
+  const envelopeB = codec.decodeRequest(payloadB);
+
+  assert.match(envelopeA.session.sessionId, /^codex-synth-/);
+  assert.match(envelopeB.session.sessionId, /^codex-synth-/);
+  assert.notEqual(envelopeA.session.sessionId, envelopeB.session.sessionId);
+  assert.equal((payloadA.metadata as Record<string, unknown>)?.tokenpilotSyntheticSessionId, envelopeA.session.sessionId);
+  assert.equal((payloadB.metadata as Record<string, unknown>)?.tokenpilotSyntheticSessionId, envelopeB.session.sessionId);
 });
 
 test("syncPayloadFromEnvelope updates managed fields in place while preserving unknown payload fields", () => {
