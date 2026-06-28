@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { resolveTokenPilotMcpServerSpec } from "@tokenpilot/mcp";
+import { resolveTokenPilotMcpServerSpec, type TokenPilotMcpServerSpec } from "@tokenpilot/mcp";
 import {
   defaultCodexConfigPath,
   defaultHooksConfigPath,
@@ -120,6 +120,16 @@ function tokenPilotHookCommand(adapterRoot: string): string {
   return `${shellQuote(process.execPath)} ${shellQuote(join(adapterRoot, "dist", "hooks-handler.js"))}`;
 }
 
+export function resolveCodexHookCommandForInstall(): string {
+  return tokenPilotHookCommand(adapterRootFromHere());
+}
+
+export function resolveCodexMcpServerSpecForInstall(stateDir: string): TokenPilotMcpServerSpec {
+  return resolveTokenPilotMcpServerSpec({
+    stateDir,
+  });
+}
+
 function asHookConfig(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -194,6 +204,9 @@ export async function installCodexTokenPilot(params?: {
   baseUrl: string;
   hooksInstalled: boolean;
   mcpServerName: string;
+  expectedHookCommand: string;
+  expectedMcpCommand: string;
+  expectedMcpArgs: string[];
 }> {
   const codexConfigPath = params?.codexConfigPath ?? defaultCodexConfigPath();
   const tokenPilotConfigPath = params?.tokenPilotConfigPath ?? defaultTokenPilotConfigPath();
@@ -203,9 +216,7 @@ export async function installCodexTokenPilot(params?: {
   tokenPilotConfig.providerName = providerName;
   await writeTokenPilotCodexConfig(tokenPilotConfig, tokenPilotConfigPath);
   const baseUrl = `http://127.0.0.1:${tokenPilotConfig.proxyPort}/v1`;
-  const mcpServer = resolveTokenPilotMcpServerSpec({
-    stateDir: tokenPilotConfig.stateDir,
-  });
+  const mcpServer = resolveCodexMcpServerSpecForInstall(tokenPilotConfig.stateDir);
 
   await mkdir(dirname(codexConfigPath), { recursive: true });
   const existing = existsSync(codexConfigPath) ? await readFile(codexConfigPath, "utf8") : "";
@@ -228,6 +239,7 @@ export async function installCodexTokenPilot(params?: {
       adapterRoot: adapterRootFromHere(),
     });
   }
+  const expectedHookCommand = resolveCodexHookCommandForInstall();
   return {
     codexConfigPath,
     tokenPilotConfigPath,
@@ -236,5 +248,8 @@ export async function installCodexTokenPilot(params?: {
     baseUrl,
     hooksInstalled,
     mcpServerName: mcpServer.serverName,
+    expectedHookCommand,
+    expectedMcpCommand: mcpServer.command,
+    expectedMcpArgs: mcpServer.args,
   };
 }
