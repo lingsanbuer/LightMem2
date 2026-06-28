@@ -42,9 +42,12 @@ export async function buildSessionReportResult(params: {
     return { text: "TokenPilot stateDir is not configured." };
   }
   const latest = await params.readLatestUxEffect(stateDir);
-  const sessionId = normalizeSessionId(params.explicitSessionId)
-    ?? normalizeSessionId(latest?.sessionId)
-    ?? await params.resolveLatestSessionId(stateDir);
+  const sessionId = await resolvePreferredSessionId({
+    explicitSessionId: params.explicitSessionId,
+    stateDir,
+    resolveLatestSessionId: params.resolveLatestSessionId,
+    readLatestUxEffect: params.readLatestUxEffect,
+  });
   if (!sessionId) {
     return { text: "No TokenPilot session stats yet." };
   }

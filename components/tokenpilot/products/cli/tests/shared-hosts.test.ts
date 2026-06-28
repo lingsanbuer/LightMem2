@@ -105,7 +105,7 @@ test("shared host helpers return shared report fallback messages and report text
       };
     },
     async readSessionAggregate(_stateDir, sessionId) {
-      assert.equal(sessionId, "session-ux");
+      assert.equal(sessionId, "session-latest");
       return null;
     },
   });
@@ -150,7 +150,7 @@ test("shared host helpers return shared report fallback messages and report text
 
   assert.equal(noStateDir.text, "TokenPilot stateDir is not configured.");
   assert.equal(noStats.text, "No TokenPilot session stats yet.");
-  assert.equal(noAggregate.text, "No TokenPilot savings recorded yet for session session-ux.");
+  assert.equal(noAggregate.text, "No TokenPilot savings recorded yet for session session-latest.");
   assert.match(report.text, /session: session-a/);
   assert.match(report.text, /saved chars: 800/);
 });
