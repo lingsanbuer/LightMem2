@@ -6,7 +6,6 @@ import type {
 } from "@tokenpilot/host-adapter";
 import {
   createProductSurfaceCommandHandler,
-  formatSessionReport,
   getNestedValue,
   formatDisplayValue,
   formatOnOff,
@@ -27,6 +26,7 @@ import {
 import { resolveLatestCodexSessionId } from "../../../../adapters/codex/src/session-state.js";
 import { renderCodexSessionVisual } from "../../../../adapters/codex/src/session-visual.js";
 import { readCodexUxSessionAggregate, readLatestCodexUxEffect } from "../../../../adapters/codex/src/ux-effects.js";
+import { buildSessionReportResult, resolvePreferredSessionId } from "./shared.js";
 
 const CODEX_REDUCTION_PASS_NAMES = [
   "readStateCompaction",
@@ -35,11 +35,6 @@ const CODEX_REDUCTION_PASS_NAMES = [
   "execOutputTruncation",
   "agentsStartupOptimization",
 ] as const;
-
-function normalizeSessionId(value: unknown): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text || undefined;
-}
 
 async function loadConfig(): Promise<Record<string, unknown>> {
   return loadTokenPilotCodexConfig(defaultTokenPilotConfigPath()) as unknown as Record<string, unknown>;
@@ -56,9 +51,11 @@ async function writeConfig(nextConfig: Record<string, unknown>): Promise<void> {
 async function maybeResolveLatestSessionId(): Promise<string | undefined> {
   const currentConfig = await loadConfig();
   const stateDir = resolveCodexStateDir(currentConfig);
-  if (!stateDir) return undefined;
-  return normalizeSessionId(await resolveLatestCodexSessionId(stateDir))
-    ?? normalizeSessionId((await readLatestCodexUxEffect(stateDir))?.sessionId);
+  return resolvePreferredSessionId({
+    stateDir,
+    resolveLatestSessionId: resolveLatestCodexSessionId,
+    readLatestUxEffect: readLatestCodexUxEffect,
+  });
 }
 
 function splitArgs(raw: string): string[] {
@@ -222,37 +219,25 @@ export function createCodexCliBridge(target: {
       if (!stateDir) {
         return { text: "TokenPilot stateDir is not configured." };
       }
-      const sessionId = normalizeSessionId(target.sessionId) ?? await resolveLatestCodexSessionId(stateDir);
+      const sessionId = await resolvePreferredSessionId({
+        explicitSessionId: target.sessionId,
+        stateDir,
+        resolveLatestSessionId: resolveLatestCodexSessionId,
+        readLatestUxEffect: readLatestCodexUxEffect,
+      });
       return {
         text: await renderCodexSessionVisual(stateDir, sessionId),
       };
     },
     async handleReport(_ctx, currentConfig) {
-      const stateDir = resolveCodexStateDir(currentConfig);
-      if (!stateDir) {
-        return { text: "TokenPilot stateDir is not configured." };
-      }
-      const latest = await readLatestCodexUxEffect(stateDir);
-      const sessionId = normalizeSessionId(target.sessionId)
-        ?? normalizeSessionId(latest?.sessionId)
-        ?? await resolveLatestCodexSessionId(stateDir);
-      if (!sessionId) {
-        return { text: "No TokenPilot session stats yet." };
-      }
-      const aggregate = await readCodexUxSessionAggregate(stateDir, sessionId);
-      if (!aggregate) {
-        return { text: `No TokenPilot savings recorded yet for session ${sessionId}.` };
-      }
-      const pluginCfg = codexProductSurfaceConfigAdapter.pluginConfigRecord(currentConfig);
-      const detailsEnabled = getNestedValue(pluginCfg, ["ux", "details"]) === true;
-      return {
-        text: formatSessionReport({
-          sessionId,
-          aggregate,
-          latest,
-          detailsEnabled,
-        }),
-      };
+      return buildSessionReportResult({
+        currentConfig,
+        explicitSessionId: target.sessionId,
+        configAdapter: codexProductSurfaceConfigAdapter,
+        resolveLatestSessionId: resolveLatestCodexSessionId,
+        readLatestUxEffect: readLatestCodexUxEffect,
+        readSessionAggregate: readCodexUxSessionAggregate,
+      });
     },
   };
 

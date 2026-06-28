@@ -6,7 +6,6 @@ import type {
 } from "@tokenpilot/host-adapter";
 import {
   createProductSurfaceCommandHandler,
-  formatSessionReport,
   getNestedValue,
   formatDisplayValue,
   formatOnOff,
@@ -33,6 +32,7 @@ import {
   readClaudeCodeUxSessionAggregate,
   readLatestClaudeCodeUxEffect,
 } from "../../../../adapters/claude-code/src/ux-effects.js";
+import { buildSessionReportResult, resolvePreferredSessionId } from "./shared.js";
 
 const CLAUDE_REDUCTION_PASS_NAMES = [
   "readStateCompaction",
@@ -41,11 +41,6 @@ const CLAUDE_REDUCTION_PASS_NAMES = [
   "execOutputTruncation",
   "agentsStartupOptimization",
 ] as const;
-
-function normalizeSessionId(value: unknown): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text || undefined;
-}
 
 async function loadConfig(): Promise<Record<string, unknown>> {
   return loadTokenPilotClaudeCodeConfig(defaultTokenPilotClaudeCodeConfigPath()) as unknown as Record<string, unknown>;
@@ -62,9 +57,11 @@ async function writeConfig(nextConfig: Record<string, unknown>): Promise<void> {
 async function maybeResolveLatestSessionId(): Promise<string | undefined> {
   const currentConfig = await loadConfig();
   const stateDir = resolveClaudeCodeStateDir(currentConfig);
-  if (!stateDir) return undefined;
-  return normalizeSessionId(await resolveLatestClaudeCodeSessionId(stateDir))
-    ?? normalizeSessionId((await readLatestClaudeCodeUxEffect(stateDir))?.sessionId);
+  return resolvePreferredSessionId({
+    stateDir,
+    resolveLatestSessionId: resolveLatestClaudeCodeSessionId,
+    readLatestUxEffect: readLatestClaudeCodeUxEffect,
+  });
 }
 
 function splitArgs(raw: string): string[] {
@@ -228,37 +225,25 @@ export function createClaudeCodeCliBridge(target: {
       if (!stateDir) {
         return { text: "TokenPilot stateDir is not configured." };
       }
-      const sessionId = normalizeSessionId(target.sessionId) ?? await resolveLatestClaudeCodeSessionId(stateDir);
+      const sessionId = await resolvePreferredSessionId({
+        explicitSessionId: target.sessionId,
+        stateDir,
+        resolveLatestSessionId: resolveLatestClaudeCodeSessionId,
+        readLatestUxEffect: readLatestClaudeCodeUxEffect,
+      });
       return {
         text: await renderClaudeCodeSessionVisual(stateDir, sessionId),
       };
     },
     async handleReport(_ctx, currentConfig) {
-      const stateDir = resolveClaudeCodeStateDir(currentConfig);
-      if (!stateDir) {
-        return { text: "TokenPilot stateDir is not configured." };
-      }
-      const latest = await readLatestClaudeCodeUxEffect(stateDir);
-      const sessionId = normalizeSessionId(target.sessionId)
-        ?? normalizeSessionId(latest?.sessionId)
-        ?? await resolveLatestClaudeCodeSessionId(stateDir);
-      if (!sessionId) {
-        return { text: "No TokenPilot session stats yet." };
-      }
-      const aggregate = await readClaudeCodeUxSessionAggregate(stateDir, sessionId);
-      if (!aggregate) {
-        return { text: `No TokenPilot savings recorded yet for session ${sessionId}.` };
-      }
-      const pluginCfg = claudeCodeProductSurfaceConfigAdapter.pluginConfigRecord(currentConfig);
-      const detailsEnabled = getNestedValue(pluginCfg, ["ux", "details"]) === true;
-      return {
-        text: formatSessionReport({
-          sessionId,
-          aggregate,
-          latest,
-          detailsEnabled,
-        }),
-      };
+      return buildSessionReportResult({
+        currentConfig,
+        explicitSessionId: target.sessionId,
+        configAdapter: claudeCodeProductSurfaceConfigAdapter,
+        resolveLatestSessionId: resolveLatestClaudeCodeSessionId,
+        readLatestUxEffect: readLatestClaudeCodeUxEffect,
+        readSessionAggregate: readClaudeCodeUxSessionAggregate,
+      });
     },
   };
 
