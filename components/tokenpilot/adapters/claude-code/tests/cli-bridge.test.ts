@@ -4,18 +4,21 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { createCodexCliBridge } from "../../../products/cli/src/hosts/codex.js";
-import { loadTokenPilotCodexConfig, defaultTokenPilotConfigPath } from "../src/config.js";
+import { createClaudeCodeCliBridge } from "../../../products/cli/src/hosts/claude-code.js";
+import {
+  defaultTokenPilotClaudeCodeConfigPath,
+  loadTokenPilotClaudeCodeConfig,
+} from "../src/config.js";
 
-test("codex cli bridge exposes only the supported Codex command surface", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-bridge-"));
+test("claude-code cli bridge exposes only the supported Claude Code command surface", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-bridge-"));
   const originalHome = process.env.HOME;
   process.env.HOME = dir;
   try {
-    const { handleCommand } = createCodexCliBridge({ host: "codex" });
+    const { handleCommand } = createClaudeCodeCliBridge({ host: "claude-code" });
 
     const status = await handleCommand({ args: "status" });
-    assert.match(status.text, /TokenPilot Codex status:/);
+    assert.match(status.text, /TokenPilot Claude Code status:/);
     assert.doesNotMatch(status.text, /lifecycle eviction/i);
     assert.doesNotMatch(status.text, /task-state estimator/i);
 
@@ -23,35 +26,35 @@ test("codex cli bridge exposes only the supported Codex command surface", async 
     assert.equal(reduction.text, "✅ Observation Reduction disabled");
 
     const reductionStatus = await handleCommand({ args: "reduction status" });
-    assert.match(reductionStatus.text, /Observation Reduction \(Codex\):/);
+    assert.match(reductionStatus.text, /Observation Reduction \(Claude Code\):/);
     assert.doesNotMatch(reductionStatus.text, /formatSlimming/);
 
     const stabilizer = await handleCommand({ args: "stabilizer target user" });
     assert.equal(stabilizer.text, "✅ hooks.dynamicContextTarget = user");
 
     const doctor = await handleCommand({ args: "doctor" });
-    assert.match(doctor.text, /TokenPilot Codex doctor:/);
+    assert.match(doctor.text, /TokenPilot Claude Code doctor:/);
 
     const visual = await handleCommand({ args: "visual" });
-    assert.equal(visual.text, "No Codex TokenPilot session data found.");
+    assert.equal(visual.text, "No Claude Code TokenPilot session data found.");
 
     const report = await handleCommand({ args: "report" });
     assert.equal(report.text, "No TokenPilot session stats yet.");
 
     const unsupportedSettings = await handleCommand({ args: "settings details on" });
-    assert.equal(unsupportedSettings.text, "Codex does not expose shared runtime settings yet.");
+    assert.equal(unsupportedSettings.text, "Claude Code does not expose shared runtime settings yet.");
 
     const unsupportedEviction = await handleCommand({ args: "eviction on" });
-    assert.equal(unsupportedEviction.text, "Codex lifecycle eviction controls are not supported.");
+    assert.equal(unsupportedEviction.text, "Claude Code lifecycle eviction controls are not supported.");
 
     const aggressiveMode = await handleCommand({ args: "mode aggressive" });
-    assert.equal(aggressiveMode.text, "Codex does not support lifecycle eviction mode. Use `mode normal` or `mode conservative`.");
+    assert.equal(aggressiveMode.text, "Claude Code does not support lifecycle eviction mode. Use `mode normal` or `mode conservative`.");
 
     const unsupportedHook = await handleCommand({ args: "stabilizer hook on" });
-    assert.equal(unsupportedHook.text, "Codex currently supports only `stabilizer on|off` and `stabilizer target <developer|user>`.");
+    assert.equal(unsupportedHook.text, "Claude Code currently supports only `stabilizer on|off` and `stabilizer target <developer|user>`.");
 
     const unsupportedReductionPass = await handleCommand({ args: "reduction pass formatSlimming on" });
-    assert.equal(unsupportedReductionPass.text, "Codex reduction supports only these passes: readStateCompaction, toolPayloadTrim, htmlSlimming, execOutputTruncation, agentsStartupOptimization");
+    assert.equal(unsupportedReductionPass.text, "Claude Code reduction supports only these passes: readStateCompaction, toolPayloadTrim, htmlSlimming, execOutputTruncation, agentsStartupOptimization");
   } finally {
     if (originalHome === undefined) {
       delete process.env.HOME;
@@ -62,12 +65,12 @@ test("codex cli bridge exposes only the supported Codex command surface", async 
   }
 });
 
-test("codex cli bridge visual renders tracked session state", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-bridge-visual-"));
+test("claude-code cli bridge visual renders tracked session state", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-bridge-visual-"));
   const originalHome = process.env.HOME;
   process.env.HOME = dir;
   try {
-    const stateDir = join(dir, ".codex", "tokenpilot-state", "tokenpilot");
+    const stateDir = join(dir, ".claude", "tokenpilot-state", "tokenpilot");
     await mkdir(join(stateDir, "session-state", "sessions"), { recursive: true });
     await mkdir(join(stateDir, "session-state", "bindings"), { recursive: true });
     await writeFile(
@@ -79,14 +82,18 @@ test("codex cli bridge visual renders tracked session state", async () => {
       join(stateDir, "session-state", "sessions", "session-1.json"),
       JSON.stringify({
         sessionId: "session-1",
-        latestResponseId: "resp-3",
-        previousResponseId: "resp-2",
-        latestModel: "gpt-5.4-mini",
+        latestResponseId: "msg-3",
+        previousResponseId: "msg-2",
+        latestModel: "claude-sonnet-4-6",
         workspaceHint: "/repo/demo",
         lastHookEvent: "PostToolUse",
-        lastToolName: "read",
+        lastToolName: "Read",
         lastToolInputChars: 64,
         lastToolOutputChars: 512,
+        requestChars: 1200,
+        responseChars: 720,
+        assistantChars: 330,
+        reductionSavedChars: 880,
         updatedAt: "2026-06-26T10:00:00.000Z",
       }, null, 2),
       "utf8",
@@ -96,25 +103,25 @@ test("codex cli bridge visual renders tracked session state", async () => {
       [
         JSON.stringify({
           sessionId: "session-1",
-          responseId: "resp-2",
-          previousResponseId: "resp-1",
-          model: "gpt-5.4-mini",
+          responseId: "msg-2",
+          previousResponseId: "msg-1",
+          model: "claude-sonnet-4-6",
           requestChars: 1000,
           responseChars: 500,
           assistantChars: 210,
-          toolCallCount: 1,
+          reductionSavedChars: 300,
           stream: false,
           updatedAt: "2026-06-26T09:59:00.000Z",
         }),
         JSON.stringify({
           sessionId: "session-1",
-          responseId: "resp-3",
-          previousResponseId: "resp-2",
-          model: "gpt-5.4-mini",
+          responseId: "msg-3",
+          previousResponseId: "msg-2",
+          model: "claude-sonnet-4-6",
           requestChars: 1200,
           responseChars: 720,
           assistantChars: 330,
-          toolCallCount: 2,
+          reductionSavedChars: 880,
           stream: true,
           updatedAt: "2026-06-26T10:00:00.000Z",
         }),
@@ -123,12 +130,13 @@ test("codex cli bridge visual renders tracked session state", async () => {
       "utf8",
     );
 
-    const { handleCommand } = createCodexCliBridge({ host: "codex" });
+    const { handleCommand } = createClaudeCodeCliBridge({ host: "claude-code" });
     const visual = await handleCommand({ args: "visual" });
-    assert.match(visual.text, /TokenPilot Codex visual:/);
+    assert.match(visual.text, /TokenPilot Claude Code visual:/);
     assert.match(visual.text, /session: session-1/);
     assert.match(visual.text, /workspace: \/repo\/demo/);
-    assert.match(visual.text, /response chain: resp-3 -> resp-2/);
+    assert.match(visual.text, /response chain: msg-3 -> msg-2/);
+    assert.match(visual.text, /latest reduction savings: 880/);
   } finally {
     if (originalHome === undefined) {
       delete process.env.HOME;
@@ -139,19 +147,19 @@ test("codex cli bridge visual renders tracked session state", async () => {
   }
 });
 
-test("codex cli bridge report explains when a session has no recorded savings yet", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-bridge-report-empty-"));
+test("claude-code cli bridge report explains when a session has no recorded savings yet", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-bridge-report-empty-"));
   const originalHome = process.env.HOME;
   process.env.HOME = dir;
   try {
-    const stateDir = join(dir, ".codex", "tokenpilot-state", "tokenpilot");
+    const stateDir = join(dir, ".claude", "tokenpilot-state", "tokenpilot");
     await mkdir(join(stateDir, "ux-effects"), { recursive: true });
     await writeFile(
       join(stateDir, "ux-effects", "latest.json"),
       JSON.stringify({
         at: "2026-06-28T10:00:00.000Z",
         sessionId: "session-empty",
-        model: "gpt-5.4-mini",
+        model: "claude-sonnet-4-6",
         countMode: "chars",
         beforeCount: 100,
         afterCount: 100,
@@ -160,7 +168,7 @@ test("codex cli bridge report explains when a session has no recorded savings ye
       "utf8",
     );
 
-    const { handleCommand } = createCodexCliBridge({ host: "codex" });
+    const { handleCommand } = createClaudeCodeCliBridge({ host: "claude-code" });
     const report = await handleCommand({ args: "report" });
     assert.equal(report.text, "No TokenPilot savings recorded yet for session session-empty.");
   } finally {
@@ -173,12 +181,12 @@ test("codex cli bridge report explains when a session has no recorded savings ye
   }
 });
 
-test("codex cli bridge persists only supported settings across reload", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-bridge-persist-"));
+test("claude-code cli bridge persists only supported settings across reload", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-bridge-persist-"));
   const originalHome = process.env.HOME;
   process.env.HOME = dir;
   try {
-    const bridge = createCodexCliBridge({ host: "codex" });
+    const bridge = createClaudeCodeCliBridge({ host: "claude-code" });
 
     const reduction = await bridge.handleCommand({ args: "reduction off" });
     assert.equal(reduction.text, "✅ Observation Reduction disabled");
@@ -187,9 +195,9 @@ test("codex cli bridge persists only supported settings across reload", async ()
     assert.equal(target.text, "✅ hooks.dynamicContextTarget = user");
 
     const unsupported = await bridge.handleCommand({ args: "settings details on" });
-    assert.equal(unsupported.text, "Codex does not expose shared runtime settings yet.");
+    assert.equal(unsupported.text, "Claude Code does not expose shared runtime settings yet.");
 
-    const reloaded = await loadTokenPilotCodexConfig(defaultTokenPilotConfigPath());
+    const reloaded = await loadTokenPilotClaudeCodeConfig(defaultTokenPilotClaudeCodeConfigPath());
     assert.equal(reloaded.modules.reduction, false);
     assert.equal(reloaded.hooks.dynamicContextTarget, "user");
     assert.equal("ux" in (reloaded as unknown as Record<string, unknown>), false);
@@ -203,17 +211,17 @@ test("codex cli bridge persists only supported settings across reload", async ()
   }
 });
 
-test("codex mode writes only codex-supported fields", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-bridge-mode-"));
+test("claude-code mode writes only claude-supported fields", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-bridge-mode-"));
   const originalHome = process.env.HOME;
   process.env.HOME = dir;
   try {
-    const bridge = createCodexCliBridge({ host: "codex" });
+    const bridge = createClaudeCodeCliBridge({ host: "claude-code" });
 
     const result = await bridge.handleCommand({ args: "mode conservative" });
     assert.equal(result.text, "✅ Runtime mode = conservative");
 
-    const reloaded = await loadTokenPilotCodexConfig(defaultTokenPilotConfigPath());
+    const reloaded = await loadTokenPilotClaudeCodeConfig(defaultTokenPilotClaudeCodeConfigPath());
     assert.equal(reloaded.enabled, true);
     assert.equal(reloaded.modules.stabilizer, true);
     assert.equal(reloaded.modules.reduction, true);
@@ -226,40 +234,6 @@ test("codex mode writes only codex-supported fields", async () => {
     const modules = record.modules as Record<string, unknown>;
     assert.equal("policy" in modules, false);
     assert.equal("eviction" in modules, false);
-  } finally {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test("codex config normalization strips unsupported reduction pass options", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-bridge-sanitize-"));
-  const originalHome = process.env.HOME;
-  process.env.HOME = dir;
-  try {
-    const bridge = createCodexCliBridge({ host: "codex" });
-    const current = await loadTokenPilotCodexConfig(defaultTokenPilotConfigPath());
-    await bridge.bridge.writeConfig({
-      ...current,
-      reduction: {
-        ...current.reduction,
-        passOptions: {
-          ...current.reduction.passOptions,
-          formatSlimming: { enabled: true },
-          pathTruncation: { enabled: true },
-          htmlSlimming: { preserveTables: true },
-        },
-      },
-    });
-
-    const reloaded = await loadTokenPilotCodexConfig(defaultTokenPilotConfigPath());
-    assert.equal("formatSlimming" in reloaded.reduction.passOptions, false);
-    assert.equal("pathTruncation" in reloaded.reduction.passOptions, false);
-    assert.deepEqual(reloaded.reduction.passOptions.htmlSlimming, { preserveTables: true });
   } finally {
     if (originalHome === undefined) {
       delete process.env.HOME;
