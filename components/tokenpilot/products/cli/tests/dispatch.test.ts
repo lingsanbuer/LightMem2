@@ -203,3 +203,74 @@ test("dispatch uses the pinned default claude-code session for hostless visual",
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("dispatch uses the default openclaw host and latest session for hostless report", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-cli-openclaw-default-report-"));
+  const originalHome = process.env.HOME;
+  const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  process.env.HOME = dir;
+  process.env.OPENCLAW_CONFIG_PATH = join(dir, ".openclaw", "openclaw.json");
+  try {
+    const stateDir = join(dir, ".openclaw", "tokenpilot-state", "tokenpilot");
+    const pluginStateDir = join(stateDir, "tokenpilot");
+    await mkdir(join(pluginStateDir, "ux-effects", "sessions"), { recursive: true });
+    await writeFile(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      `${JSON.stringify({
+        plugins: {
+          entries: {
+            tokenpilot: {
+              enabled: true,
+              config: {
+                stateDir,
+              },
+            },
+          },
+          slots: {
+            contextEngine: "layered-context",
+          },
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(pluginStateDir, "ux-effects", "sessions", "openclaw-session-1.json"),
+      JSON.stringify({
+        sessionId: "openclaw-session-1",
+        turns: 3,
+        latestCountMode: "chars",
+        tokenOptimizedTurns: 0,
+        tokenSavedCount: 0,
+        avgSavedTokensPerOptimizedTurn: 0,
+        charOptimizedTurns: 2,
+        charSavedCount: 1600,
+        avgSavedCharsPerOptimizedTurn: 800,
+        latestAt: "2026-06-28T12:20:00.000Z",
+      }, null, 2),
+      "utf8",
+    );
+
+    const useHost = await dispatchCli(["use", "openclaw", "session", "openclaw-session-1"]);
+    assert.equal(useHost.text, "Default context = openclaw / openclaw-session-1");
+
+    const report = await dispatchCli(["report"]);
+    assert.match(report.text, /TokenPilot report:/);
+    assert.match(report.text, /session: openclaw-session-1/);
+
+    const persisted = await readCliContextState(join(dir, ".lightmem2", "state", "cli-context.json"));
+    assert.equal(persisted.lastActiveHost, "openclaw");
+    assert.equal(persisted.lastSessionByHost?.openclaw, "openclaw-session-1");
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
