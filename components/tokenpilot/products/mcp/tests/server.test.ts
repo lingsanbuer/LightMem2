@@ -7,7 +7,9 @@ import { archiveContent } from "@tokenpilot/runtime-core";
 import {
   handleMcpRequest,
   MEMORY_FAULT_RECOVER_TOOL_NAME,
+  probeTokenPilotMcpServer,
   resolveMemoryFaultRecover,
+  resolveTokenPilotMcpServerSpec,
 } from "../src/index.js";
 
 test("resolveMemoryFaultRecover restores archived content across sessions", async () => {
@@ -87,4 +89,19 @@ test("handleMcpRequest marks archive miss as tool error", async () => {
   assert.equal(response?.result?.isError, true);
   const content = response?.result?.content as Array<{ type: string; text: string }>;
   assert.match(content[0]?.text ?? "", /No archived content found/);
+});
+
+test("probeTokenPilotMcpServer completes initialize handshake", async () => {
+  const spec = resolveTokenPilotMcpServerSpec({
+    stateDir: join(tmpdir(), "lightmem2-mcp-probe-state"),
+  });
+  const result = await probeTokenPilotMcpServer(spec, {
+    timeoutMs: 3_000,
+    clientName: "mcp-test",
+    clientVersion: "0.1.0",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.timedOut, false);
+  assert.match(result.detail, /initialize succeeded/i);
 });

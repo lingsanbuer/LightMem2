@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -23,6 +24,12 @@ export type TokenPilotMcpServerSpec = {
 export type MemoryFaultRecoverResult = {
   text: string;
   details: Record<string, unknown>;
+};
+
+export type TokenPilotMcpProbeResult = {
+  ok: boolean;
+  detail: string;
+  timedOut: boolean;
 };
 
 function packageRootFromHere(): string {
@@ -61,6 +68,152 @@ export function resolveTokenPilotMcpServerSpec(params?: {
     },
     entryPath,
   };
+}
+
+function encodeMcpMessage(message: unknown): Buffer {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf8");
+  return Buffer.concat([header, body]);
+}
+
+function tryReadMcpInitializeResponse(buffer: Buffer): {
+  ok: boolean;
+  detail: string;
+} | null {
+  const boundary = buffer.indexOf("\r\n\r\n");
+  if (boundary < 0) return null;
+  const headerText = buffer.slice(0, boundary).toString("utf8");
+  const contentLengthMatch = /^content-length:\s*(\d+)$/im.exec(headerText);
+  if (!contentLengthMatch) {
+    return {
+      ok: false,
+      detail: "missing Content-Length header in MCP initialize response",
+    };
+  }
+  const contentLength = Number(contentLengthMatch[1]);
+  const bodyStart = boundary + 4;
+  const bodyEnd = bodyStart + contentLength;
+  if (buffer.length < bodyEnd) return null;
+
+  try {
+    const parsed = JSON.parse(buffer.slice(bodyStart, bodyEnd).toString("utf8")) as {
+      error?: { message?: string };
+      result?: { serverInfo?: { name?: string } };
+    };
+    if (parsed?.error?.message) {
+      return {
+        ok: false,
+        detail: `MCP initialize failed: ${parsed.error.message}`,
+      };
+    }
+    return {
+      ok: true,
+      detail: `MCP initialize succeeded (${parsed?.result?.serverInfo?.name ?? "server"})`,
+    };
+  } catch {
+    return {
+      ok: false,
+      detail: "invalid JSON in MCP initialize response",
+    };
+  }
+}
+
+export async function probeTokenPilotMcpServer(
+  spec: TokenPilotMcpServerSpec,
+  params?: {
+    timeoutMs?: number;
+    clientName?: string;
+    clientVersion?: string;
+  },
+): Promise<TokenPilotMcpProbeResult> {
+  const timeoutMs = params?.timeoutMs ?? 15_000;
+  const clientName = params?.clientName?.trim() || "tokenpilot-mcp-probe";
+  const clientVersion = params?.clientVersion?.trim() || "0.1.0";
+
+  return new Promise((resolve) => {
+    const child = spawn(spec.command, spec.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        ...spec.env,
+      },
+    });
+
+    let settled = false;
+    let stdoutBuffer = Buffer.alloc(0);
+    let stderrBuffer = "";
+
+    const finish = (result: TokenPilotMcpProbeResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!child.killed) child.kill();
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      finish({
+        ok: false,
+        timedOut: true,
+        detail: `MCP initialize timed out after ${Math.ceil(timeoutMs / 1000)} seconds`,
+      });
+    }, timeoutMs);
+
+    child.once("error", (error) => {
+      finish({
+        ok: false,
+        timedOut: false,
+        detail: `failed to start MCP process: ${error.message}`,
+      });
+    });
+
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderrBuffer += chunk;
+    });
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      stdoutBuffer = Buffer.concat([
+        stdoutBuffer,
+        Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk),
+      ]);
+      const parsed = tryReadMcpInitializeResponse(stdoutBuffer);
+      if (!parsed) return;
+      finish({
+        ok: parsed.ok,
+        timedOut: false,
+        detail: parsed.ok
+          ? parsed.detail
+          : `${parsed.detail}${stderrBuffer.trim() ? ` | stderr: ${stderrBuffer.trim()}` : ""}`,
+      });
+    });
+
+    child.once("exit", (code, signal) => {
+      if (settled) return;
+      finish({
+        ok: false,
+        timedOut: false,
+        detail:
+          `MCP process exited before initialize response`
+          + ` (code=${code ?? "null"}, signal=${signal ?? "null"})`
+          + `${stderrBuffer.trim() ? ` | stderr: ${stderrBuffer.trim()}` : ""}`,
+      });
+    });
+
+    child.stdin.write(encodeMcpMessage({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: {
+          name: clientName,
+          version: clientVersion,
+        },
+      },
+    }));
+  });
 }
 
 export async function inspectClaudeMcpServerConfig(configPath: string, serverName = TOKENPILOT_MCP_SERVER_NAME): Promise<{
