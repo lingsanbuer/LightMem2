@@ -62,8 +62,10 @@ The installer will:
 - add a TokenPilot provider entry to Codex config
 - switch the default `model_provider` to that TokenPilot provider
 - register a `tokenpilot_memory_fault_recover` MCP server in Codex config
+- write a conservative `startup_timeout_sec` for the recovery MCP server
 - write TokenPilot runtime config
 - register TokenPilot hooks for `SessionStart`, `PreToolUse`, `PostToolUse`, and `Stop`
+- run a post-install MCP startup probe and report degraded mode if recovery MCP is still unavailable
 
 ## Verify
 
@@ -86,6 +88,8 @@ lightmem2 codex reduction status
 Once installed, Codex can use the real internal recovery tool named
 `memory_fault_recover` through the registered MCP server. Recovery hints in
 trimmed payloads are no longer just protocol text.
+
+If install finishes in degraded MCP mode, Codex stable-prefix and reduction remain usable; only the real `memory_fault_recover` tool path is unavailable until MCP startup succeeds.
 
 For daemon-level checks:
 
