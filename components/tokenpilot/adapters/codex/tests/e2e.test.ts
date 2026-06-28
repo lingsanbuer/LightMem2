@@ -491,3 +491,28 @@ test("Codex requests reuse synth sessions through prompt_cache_key when previous
     }
   });
 });
+
+test("Codex CLI report and visual return clear empty-state messages before any runtime data exists", async () => {
+  await withTempHome("lightmem2-codex-cli-empty-state-", async (homeDir) => {
+    const proxyPort = await reserveUnusedPort();
+    const stateDir = join(homeDir, ".codex", "tokenpilot-state", "tokenpilot");
+    const tokenPilotConfigPath = defaultTokenPilotConfigPath();
+
+    await mkdir(join(homeDir, ".codex"), { recursive: true });
+    await writeTokenPilotCodexConfig(
+      normalizeTokenPilotCodexConfig({
+        proxyPort,
+        stateDir,
+      }),
+      tokenPilotConfigPath,
+    );
+
+    const { handleCommand } = createCodexCliBridge({ host: "codex" });
+
+    const report = await handleCommand({ args: "report" });
+    assert.equal(report.text, "No TokenPilot session stats yet.");
+
+    const visual = await handleCommand({ args: "visual" });
+    assert.equal(visual.text, "No Codex TokenPilot session data found.");
+  });
+});

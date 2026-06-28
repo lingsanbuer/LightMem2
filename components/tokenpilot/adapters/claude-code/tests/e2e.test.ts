@@ -199,3 +199,28 @@ test("Claude Code host e2e wires install, gateway reduction, report/visual, and 
     await runtime?.close();
   });
 });
+
+test("Claude Code CLI report and visual return clear empty-state messages before any runtime data exists", async () => {
+  await withTempHome("lightmem2-claude-cli-empty-state-", async (homeDir) => {
+    const proxyPort = await reserveUnusedPort();
+    const stateDir = join(homeDir, ".claude", "tokenpilot-state", "tokenpilot");
+    const configPath = defaultTokenPilotClaudeCodeConfigPath();
+
+    await mkdir(join(homeDir, ".claude"), { recursive: true });
+    await writeTokenPilotClaudeCodeConfig(
+      normalizeTokenPilotClaudeCodeConfig({
+        proxyPort,
+        stateDir,
+      }),
+      configPath,
+    );
+
+    const { handleCommand } = createClaudeCodeCliBridge({ host: "claude-code" });
+
+    const report = await handleCommand({ args: "report" });
+    assert.equal(report.text, "No TokenPilot session stats yet.");
+
+    const visual = await handleCommand({ args: "visual" });
+    assert.equal(visual.text, "No Claude Code TokenPilot session data found.");
+  });
+});
