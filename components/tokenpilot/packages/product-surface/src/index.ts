@@ -12,4 +12,5 @@ export * from "./commands/runtime-reduction.js";
 export * from "./commands/runtime-eviction.js";
 export * from "./visual/session-visual.js";
 export * from "./visual/session-visual-data.js";
+export * from "./visual/session-visual-bridge.js";
 export * from "./visual/session-visual-page.js";
