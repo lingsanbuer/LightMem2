@@ -74,3 +74,9 @@ export type HostPipelineHelpers = {
     response: HostResponseEnvelope,
   ): Promise<HostResponseEnvelope> | HostResponseEnvelope;
 };
+
+export type PreparedBeforeCallResult<TReductionSummary = unknown> = {
+  envelope: HostRequestEnvelope;
+  diagnostics: BeforeCallDiagnostics;
+  reductionSummary?: TReductionSummary;
+};

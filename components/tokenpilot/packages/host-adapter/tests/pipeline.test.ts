@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import type { HostRequestEnvelope } from "../src/model/host-request.js";
 import { prepareBeforeCall } from "../src/pipeline/before-call.js";
+import { prepareBeforeCallWithReductionSummary } from "../src/pipeline/before-call-shared.js";
 import { runBeforeCallReductionOrchestrator } from "../src/pipeline/reduction-orchestrator.js";
 import { stripInternalPayloadFields } from "../src/pipeline/recovery.js";
 import { prependTextToContent } from "../src/pipeline/message-text.js";
@@ -79,6 +80,56 @@ test("prepareBeforeCall default pipeline canonicalizes root prompt and injects r
     reductionApplied: false,
     notes: ["mode=normal"],
   });
+});
+
+test("prepareBeforeCallWithReductionSummary returns transformed envelope and captured reduction summary", async () => {
+  const input = await readJsonFixture<HostRequestEnvelope>("before-call-input.json");
+  const result = await prepareBeforeCallWithReductionSummary<{ savedChars: number }>({
+    envelope: input,
+    codec: {
+      decodeRequest(rawPayload) {
+        return rawPayload as HostRequestEnvelope;
+      },
+      encodeRequest(envelope) {
+        return envelope;
+      },
+      decodeResponse(rawResponse) {
+        return rawResponse as any;
+      },
+      encodeResponse(envelope) {
+        return envelope;
+      },
+    },
+    config: { mode: "normal" },
+    prepareStablePrefix(envelope) {
+      return {
+        ...envelope,
+        messages: envelope.messages.map((message, index) => (
+          index === 0 && typeof message.content === "string"
+            ? { ...message, content: `[Stable Prefix Applied] ${message.content}` }
+            : message
+        )),
+      };
+    },
+    async applyBeforeCallReduction({ envelope }) {
+      return {
+        envelope: {
+          ...envelope,
+          messages: envelope.messages.map((message, index) => (
+            index === 0 && typeof message.content === "string"
+              ? { ...message, content: `${message.content} [Reduced]` }
+              : message
+          )),
+        },
+        summary: { savedChars: 321 },
+      };
+    },
+  });
+
+  assert.equal(result.diagnostics.stablePrefixApplied, true);
+  assert.equal(result.diagnostics.reductionApplied, true);
+  assert.equal(result.reductionSummary?.savedChars, 321);
+  assert.match(String(result.envelope.messages[0]?.content ?? ""), /\[Reduced\]/);
 });
 
 test("stripInternalPayloadFields removes internal transport markers in-place", () => {
