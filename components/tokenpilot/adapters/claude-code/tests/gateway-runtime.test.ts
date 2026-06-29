@@ -9,6 +9,7 @@ import {
   assertStablePrefixRewrite,
   type HostGatewayForwarder,
 } from "@tokenpilot/host-adapter";
+import { readVisualSessionData, readVisualSessionList } from "@tokenpilot/product-surface";
 import { normalizeTokenPilotClaudeCodeConfig } from "../src/config.js";
 import { startClaudeCodeGatewayRuntime } from "../src/gateway-runtime.js";
 import { createConsoleLogger } from "../src/logger.js";
@@ -194,6 +195,87 @@ test("gateway runtime records session-state and ux-effects after a reduced reque
     ) as { sessionId: string; savedCount: number };
     assert.equal(ux.sessionId, "sess-state-1");
     assert.ok(ux.savedCount > 0);
+
+    const sessions = await readVisualSessionList(join(dir, "state"));
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]?.sessionId, "sess-state-1");
+    assert.equal(sessions[0]?.stabilityCount, 1);
+    assert.ok((sessions[0]?.reductionCount ?? 0) > 0);
+
+    const visual = await readVisualSessionData(join(dir, "state"), "sess-state-1");
+    assert.equal(visual.stability.length, 1);
+    assert.ok(visual.reduction.length > 0);
+    assert.match(visual.stability[0]?.developerCanonical ?? "", /<WORKDIR>/);
+    assert.match(visual.stability[0]?.dynamicContextText ?? "", /WORKDIR: \/repo\/demo/);
+    assert.ok((visual.reduction[0]?.savedChars ?? 0) > 0);
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("gateway runtime does not record ux-effects when reduced request fails upstream", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-gateway-failed-"));
+  const proxyPort = await reserveUnusedPort();
+  const longToolPayload = `payload\n${"line\n".repeat(800)}`;
+  const forwarder: HostGatewayForwarder = {
+    async request() {
+      throw new Error("upstream failed");
+    },
+    async requestStream() {
+      throw new Error("stream path should not be used in this test");
+    },
+  };
+
+  const runtime = await startClaudeCodeGatewayRuntime({
+    config: normalizeTokenPilotClaudeCodeConfig({
+      stateDir: join(dir, "state"),
+      proxyPort,
+      reduction: {
+        triggerMinChars: 256,
+        maxToolChars: 300,
+        passes: {
+          readStateCompaction: false,
+          toolPayloadTrim: true,
+          htmlSlimming: false,
+          execOutputTruncation: true,
+          agentsStartupOptimization: false,
+        },
+      },
+    }),
+    logger: createConsoleLogger(false),
+    forwarder,
+  });
+
+  try {
+    const requestResp = await fetch(`${runtime.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-session-id": "sess-failed-1",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        stream: false,
+        system: "Your working directory is: /repo/demo",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "summarize this" },
+              { type: "tool_result", tool_use_id: "toolu_1", content: longToolPayload },
+            ],
+          },
+        ],
+        max_tokens: 256,
+      }),
+    });
+
+    assert.equal(requestResp.status, 500);
+    await assert.rejects(
+      readFile(join(dir, "state", "ux-effects", "latest.json"), "utf8"),
+      /ENOENT/,
+    );
   } finally {
     await runtime.close();
     await rm(dir, { recursive: true, force: true });

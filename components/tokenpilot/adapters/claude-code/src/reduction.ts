@@ -16,6 +16,7 @@ type ClaudeSegmentBinding = {
   messageIndex: number;
   blockIndex?: number;
   field: "content" | "text";
+  toolName?: string;
 };
 
 type ClaudeReductionInstruction = {
@@ -57,6 +58,18 @@ type ClaudeReductionReportEntry = {
   touchedSegmentIds?: string[];
 };
 
+export type ClaudeReductionVisualSegment = {
+  segmentId: string;
+  messageIndex: number;
+  field: "content" | "text" | "arguments" | "output" | "result";
+  blockIndex?: number;
+  toolName?: string;
+  savedChars: number;
+  beforeText: string;
+  afterText: string;
+  report: ClaudeReductionReportEntry[];
+};
+
 export type ClaudeReductionSummary = {
   changedMessages: number;
   changedBlocks: number;
@@ -66,6 +79,7 @@ export type ClaudeReductionSummary = {
   report: ClaudeReductionReportEntry[];
   passEffects: ClaudeReductionPassEffect[];
   diagnostics: ClaudeReductionDiagnostics;
+  visualSegments?: ClaudeReductionVisualSegment[];
   skippedReason?: string;
 };
 
@@ -246,6 +260,7 @@ function buildTurnContext(payload: any, sessionId: string): {
           messageIndex,
           blockIndex,
           field: typeof entry.text === "string" ? "text" : "content",
+          toolName: typeof entry.name === "string" ? entry.name : undefined,
         });
       });
     });
@@ -538,6 +553,7 @@ export async function applyBeforeCallReductionToClaudePayload(params: {
   let changedBlocks = 0;
   let savedChars = 0;
   const changedMessages = new Set<number>();
+  const visualSegments: ClaudeReductionVisualSegment[] = [];
 
   for (const binding of bindings) {
     if (!changedSegmentIds.has(binding.segmentId)) continue;
@@ -561,7 +577,19 @@ export async function applyBeforeCallReductionToClaudePayload(params: {
 
     changedBlocks += 1;
     changedMessages.add(binding.messageIndex);
-    savedChars += Math.max(0, before.length - segment.text.length);
+    const segmentSavedChars = Math.max(0, before.length - segment.text.length);
+    savedChars += segmentSavedChars;
+    visualSegments.push({
+      segmentId: binding.segmentId,
+      messageIndex: binding.messageIndex,
+      field: binding.field,
+      blockIndex: binding.blockIndex,
+      toolName: binding.toolName,
+      savedChars: segmentSavedChars,
+      beforeText: before,
+      afterText: segment.text,
+      report: report.filter((entry) => entry.changed && entry.touchedSegmentIds?.includes(binding.segmentId)),
+    });
   }
 
   return {
@@ -573,6 +601,7 @@ export async function applyBeforeCallReductionToClaudePayload(params: {
     report,
     passEffects,
     diagnostics: built.diagnostics,
+    visualSegments,
   };
 }
 

@@ -1,8 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type {
+import {
   TokenPilotProductSurfaceConfigAdapter,
   TokenPilotProductSurfaceHostBridge,
+  readLatestUxEffect,
+  readUxSessionAggregate,
 } from "@tokenpilot/host-adapter";
 import {
   getNestedValue,
@@ -27,10 +29,6 @@ import {
 } from "../../../../adapters/claude-code/src/host-config-adapter.js";
 import { resolveLatestClaudeCodeSessionId } from "../../../../adapters/claude-code/src/session-state.js";
 import { renderClaudeCodeSessionVisual } from "../../../../adapters/claude-code/src/session-visual.js";
-import {
-  readClaudeCodeUxSessionAggregate,
-  readLatestClaudeCodeUxEffect,
-} from "../../../../adapters/claude-code/src/ux-effects.js";
 import {
   applyStandardRuntimeModeConfig,
   buildSessionReportResult,
@@ -64,7 +62,7 @@ async function maybeResolveLatestSessionId(): Promise<string | undefined> {
     loadConfig,
     resolveStateDir: resolveClaudeCodeStateDir,
     resolveLatestSessionId: resolveLatestClaudeCodeSessionId,
-    readLatestUxEffect: readLatestClaudeCodeUxEffect,
+    readLatestUxEffect,
   });
 }
 
@@ -120,7 +118,7 @@ export function createClaudeCodeCliBridge(target: {
         explicitSessionId: target.sessionId,
         stateDir,
         resolveLatestSessionId: resolveLatestClaudeCodeSessionId,
-        readLatestUxEffect: readLatestClaudeCodeUxEffect,
+        readLatestUxEffect,
       });
       return {
         text: await renderClaudeCodeSessionVisual(stateDir, sessionId),
@@ -132,8 +130,8 @@ export function createClaudeCodeCliBridge(target: {
         explicitSessionId: target.sessionId,
         configAdapter: claudeCodeProductSurfaceConfigAdapter,
         resolveLatestSessionId: resolveLatestClaudeCodeSessionId,
-        readLatestUxEffect: readLatestClaudeCodeUxEffect,
-        readSessionAggregate: readClaudeCodeUxSessionAggregate,
+        readLatestUxEffect,
+        readSessionAggregate: readUxSessionAggregate,
       });
     },
   };

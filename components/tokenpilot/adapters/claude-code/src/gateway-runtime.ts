@@ -1,14 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { Server } from "node:http";
 import { mkdir } from "node:fs/promises";
 import {
-  createStaticStatePathResolver,
-  prepareBeforeCall,
   createSseJsonStreamObserver,
+  createStaticStatePathResolver,
   type HostGatewayForwarder,
   type HostGatewayStreamObserver,
+  recordUxEffect,
+  sendJsonResponse,
+  startHostGatewayRuntimeServer,
+  setForwardResponseHeaders,
 } from "@tokenpilot/host-adapter";
+import {
+  prepareObservedBeforeCall,
+} from "@tokenpilot/product-surface";
 import { configureStatePathResolver } from "@tokenpilot/runtime-core";
 import type { TokenPilotClaudeCodeConfig } from "./config.js";
 import { proxyBaseUrlForPort } from "./config.js";
@@ -22,39 +26,11 @@ import {
 import { prepareClaudeStablePrefix } from "./stable-prefix.js";
 import { appendClaudeCodeTrace } from "./trace.js";
 import { defaultClaudeCodeGatewayForwarder, resolveClaudeCodeUpstream } from "./upstream.js";
-import { recordClaudeCodeUxEffect } from "./ux-effects.js";
 
 export type ClaudeCodeGatewayRuntime = {
   baseUrl: string;
   close(): Promise<void>;
 };
-
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
-  res.statusCode = statusCode;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(payload));
-}
-
-function setForwardHeaders(
-  res: ServerResponse,
-  headers: Record<string, string>,
-  fallbackContentType: string,
-): void {
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (lower === "content-length" || lower === "content-encoding") continue;
-    if (typeof value === "string" && value) res.setHeader(key, value);
-  }
-  if (!res.hasHeader("content-type")) res.setHeader("content-type", fallbackContentType);
-}
 
 function extractWorkspaceHint(envelope: {
   instructions?: string;
@@ -111,7 +87,7 @@ async function recordClaudeGatewayTurn(params: {
     updatedAt,
   });
   if (params.reductionSavedChars > 0) {
-    await recordClaudeCodeUxEffect(params.stateDir, {
+    await recordUxEffect(params.stateDir, {
       at: updatedAt,
       sessionId: params.sessionId,
       model: params.model,
@@ -153,24 +129,17 @@ export async function startClaudeCodeGatewayRuntime(params: {
     usagePaths: [["usage"]],
   });
 
-  const server = createServer(async (req, res) => {
-    try {
-      if (req.method === "GET" && req.url === "/health") {
-        sendJson(res, 200, {
-          ok: true,
-          adapter: "tokenpilot-claude-code",
-          upstream: upstream.baseUrl,
-          stateDir: config.stateDir,
-        });
-        return;
-      }
-
-      if (req.method !== "POST" || req.url !== "/v1/messages") {
-        sendJson(res, 404, { error: "not found" });
-        return;
-      }
-
-      const body = await readRequestBody(req);
+  const runtime = await startHostGatewayRuntimeServer({
+    port: config.proxyPort,
+    requestPath: "/v1/messages",
+    basePath: "/v1",
+    healthPayload: {
+      ok: true,
+      adapter: "tokenpilot-claude-code",
+      upstream: upstream.baseUrl,
+      stateDir: config.stateDir,
+    },
+    async handleRequest({ req, res, body }) {
       let payload = JSON.parse(body);
       let envelope = codec.decodeRequest(payload, {
         headers: req.headers as Record<string, string | string[] | undefined>,
@@ -183,26 +152,65 @@ export async function startClaudeCodeGatewayRuntime(params: {
       }
       const authorization = typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
       const sessionId = envelope.session.sessionId;
+      const model = envelope.model;
       const workspaceHint = extractWorkspaceHint(envelope);
-      let reductionSummary: ClaudeReductionSummary | undefined;
-      const prepared = await prepareBeforeCall({
+      const prepared = await prepareObservedBeforeCall<ClaudeReductionSummary>({
         envelope,
+        codec,
         config: { mode: "normal" },
-        helpers: {
-          prepareStablePrefix(nextEnvelope) {
-            return prepareClaudeStablePrefix(nextEnvelope, config);
+        prepareStablePrefix(nextEnvelope) {
+          return prepareClaudeStablePrefix(nextEnvelope, config);
+        },
+        async applyBeforeCallReduction({ envelope: nextEnvelope, codec: nextCodec }) {
+          return reduceClaudeRequestEnvelope({
+            envelope: nextEnvelope,
+            codec: nextCodec,
+            config,
+          });
+        },
+        observability: {
+          stateDir: config.stateDir,
+          sessionId,
+          model,
+          recordUxEffectNow: false,
+          buildStability({ originalEnvelope, prepared }) {
+            return prepared.diagnostics.stablePrefixApplied === true
+              ? {
+                originalEnvelope,
+                dynamicContextTarget: "user",
+                getDeveloperText(envelope) {
+                  return typeof envelope.instructions === "string" ? envelope.instructions : "";
+                },
+              }
+              : undefined;
           },
-          async applyBeforeCallReduction(nextEnvelope) {
-            const reduced = await reduceClaudeRequestEnvelope({
-              envelope: nextEnvelope,
-              codec,
-              config,
-            });
-            reductionSummary = reduced.summary;
-            return reduced.envelope;
+          buildReduction(reductionSummary) {
+            return reductionSummary.savedChars > 0
+              ? {
+                countMode: "chars",
+                beforeCount: reductionSummary.beforeChars,
+                afterCount: reductionSummary.afterChars,
+                savedCount: reductionSummary.savedChars,
+                details: {
+                  requestSavedCount: reductionSummary.savedChars,
+                },
+                segments: (reductionSummary.visualSegments ?? []).map((segment) => ({
+                  segmentId: segment.segmentId,
+                  itemIndex: segment.messageIndex,
+                  field: segment.field === "text" ? "content" : segment.field,
+                  blockIndex: segment.blockIndex,
+                  toolName: segment.toolName,
+                  savedChars: segment.savedChars,
+                  beforeText: segment.beforeText,
+                  afterText: segment.afterText,
+                  report: segment.report,
+                })),
+              }
+              : undefined;
           },
         },
       });
+      const reductionSummary = prepared.reductionSummary;
       payload = codec.encodeRequest(prepared.envelope);
 
       await appendClaudeCodeTrace(config.stateDir, {
@@ -227,7 +235,7 @@ export async function startClaudeCodeGatewayRuntime(params: {
           inboundAuthorization: authorization,
         });
         res.statusCode = upstreamResp.status;
-        setForwardHeaders(res, upstreamResp.headers, "text/event-stream; charset=utf-8");
+        setForwardResponseHeaders(res, upstreamResp.headers, "text/event-stream; charset=utf-8");
         const chunks: Buffer[] = [];
         upstreamResp.stream.on("data", (chunk) => {
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
@@ -288,7 +296,7 @@ export async function startClaudeCodeGatewayRuntime(params: {
         payload,
         inboundAuthorization: authorization,
       });
-      setForwardHeaders(res, upstreamResp.headers, "application/json; charset=utf-8");
+      setForwardResponseHeaders(res, upstreamResp.headers, "application/json; charset=utf-8");
       res.statusCode = upstreamResp.status;
       let assistantChars = 0;
       let responseId: string | undefined;
@@ -327,28 +335,17 @@ export async function startClaudeCodeGatewayRuntime(params: {
         workspaceHint,
       });
       res.end(upstreamResp.text);
-    } catch (error) {
+    },
+    async handleError({ error, res }) {
       logger.error(error instanceof Error ? error.message : String(error));
-      sendJson(res, 500, {
+      sendJsonResponse(res, 500, {
         error: error instanceof Error ? error.message : String(error),
       });
-    }
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(config.proxyPort, "127.0.0.1", () => resolve());
+    },
   });
 
   return {
     baseUrl: proxyBaseUrlForPort(config.proxyPort),
-    async close() {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
-      });
-    },
+    close: runtime.close,
   };
 }

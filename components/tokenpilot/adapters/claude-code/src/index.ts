@@ -13,4 +13,3 @@ export * from "./session-visual.js";
 export * from "./stable-prefix.js";
 export * from "./trace.js";
 export * from "./upstream.js";
-export * from "./ux-effects.js";
