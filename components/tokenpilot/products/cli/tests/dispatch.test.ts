@@ -217,14 +217,114 @@ test("dispatch uses the pinned default claude-code session for hostless visual",
     assert.equal(useContext.text, "Default context = claude-code / claude-session-pinned");
 
     const visual = await dispatchCli(["visual"]);
-    assert.match(visual.text, /TokenPilot Claude Code visual:/);
-    assert.match(visual.text, /session: claude-session-pinned/);
-    assert.match(visual.text, /workspace: \/repo\/pinned/);
+    assert.match(visual.text, /LightMem2 visual: http:\/\/127\.0\.0\.1:/);
+    assert.match(visual.text, /host=claude-code/);
+    assert.match(visual.text, /session=claude-session-pinned/);
+    assert.match(visual.text, /Claude Code: 0 session snapshots/);
   } finally {
     if (originalHome === undefined) {
       delete process.env.HOME;
     } else {
       process.env.HOME = originalHome;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("dispatch keeps top-level visual multi-host even when a default host is selected", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-cli-default-host-visual-"));
+  const originalHome = process.env.HOME;
+  const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  process.env.HOME = dir;
+  process.env.OPENCLAW_CONFIG_PATH = join(dir, ".openclaw", "openclaw.json");
+  try {
+    const openclawStateDir = join(dir, ".openclaw", "tokenpilot-state", "tokenpilot");
+    const openclawPluginStateDir = join(openclawStateDir, "tokenpilot");
+    const codexStateDir = join(dir, ".codex", "tokenpilot-state", "tokenpilot");
+    const claudeStateDir = join(dir, ".claude", "tokenpilot-state", "tokenpilot");
+
+    await mkdir(join(openclawPluginStateDir, "visual", "reduction"), { recursive: true });
+    await mkdir(join(codexStateDir, "visual", "reduction"), { recursive: true });
+    await mkdir(join(claudeStateDir, "visual", "reduction"), { recursive: true });
+    await mkdir(join(dir, ".codex"), { recursive: true });
+    await mkdir(join(dir, ".claude"), { recursive: true });
+
+    await writeFile(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      `${JSON.stringify({
+        plugins: {
+          entries: {
+            tokenpilot: {
+              enabled: true,
+              config: {
+                stateDir: openclawStateDir,
+              },
+            },
+          },
+          slots: {
+            contextEngine: "layered-context",
+          },
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(dir, ".codex", "tokenpilot.json"),
+      `${JSON.stringify({
+        enabled: true,
+        stateDir: codexStateDir,
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(dir, ".claude", "tokenpilot.json"),
+      `${JSON.stringify({
+        enabled: true,
+        stateDir: claudeStateDir,
+        upstreamBaseUrl: "https://api.anthropic.com/v1/messages",
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(openclawPluginStateDir, "visual", "reduction", "openclaw-session-1.jsonl"),
+      `${JSON.stringify({
+        kind: "reduction",
+        at: "2026-06-29T10:00:00.000Z",
+        sessionId: "openclaw-session-1",
+        requestId: "req-1",
+        model: "gpt-5.4-mini",
+        upstreamModel: "gpt-5.4-mini",
+        segmentId: "seg-1",
+        itemIndex: 0,
+        field: "content",
+        savedChars: 120,
+        beforeText: "before",
+        afterText: "after",
+        report: [],
+      })}\n`,
+      "utf8",
+    );
+
+    const useHost = await dispatchCli(["use", "openclaw", "session", "openclaw-session-1"]);
+    assert.equal(useHost.text, "Default context = openclaw / openclaw-session-1");
+
+    const visual = await dispatchCli(["visual"]);
+    assert.match(visual.text, /LightMem2 visual: http:\/\/127\.0\.0\.1:/);
+    assert.match(visual.text, /host=openclaw/);
+    assert.match(visual.text, /session=openclaw-session-1/);
+    assert.match(visual.text, /OpenClaw: 1 session snapshots/);
+    assert.match(visual.text, /Codex: 0 session snapshots/);
+    assert.match(visual.text, /Claude Code: 0 session snapshots/);
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+    if (originalConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
     }
     await rm(dir, { recursive: true, force: true });
   }

@@ -205,14 +205,28 @@ export async function maybeRunStandaloneVisualDaemon(argv: string[]): Promise<bo
 }
 
 export async function handleStandaloneVisualCommand(): Promise<{ text: string }> {
+  return handleStandaloneVisualCommandWithSelection({});
+}
+
+export async function handleStandaloneVisualCommandWithSelection(params: {
+  host?: string;
+  sessionId?: string;
+}): Promise<{ text: string }> {
   const { url, hosts } = await ensureStandaloneVisualServer();
+  const query = new URL(url);
+  if (typeof params.host === "string" && params.host.trim()) {
+    query.searchParams.set("host", params.host.trim());
+  }
+  if (typeof params.sessionId === "string" && params.sessionId.trim()) {
+    query.searchParams.set("session", params.sessionId.trim());
+  }
   const hostLines = await Promise.all(hosts.map(async (host) => {
     const sessions = await readVisualSessionList(host.stateDir);
     return `- ${host.displayName}: ${sessions.length} session snapshots`;
   }));
   return {
     text: [
-      `LightMem2 visual: ${url}`,
+      `LightMem2 visual: ${query.toString()}`,
       `- hosts: ${hosts.length}`,
       ...hostLines,
       "- open this URL in your browser, then switch hosts from the sidebar",
