@@ -64,6 +64,7 @@ The installer will:
 - enable the required tool-search environment flag
 - write TokenPilot runtime config to `~/.claude/tokenpilot.json`
 - register the shared `tokenpilot_memory_fault_recover` MCP server in `~/.claude/.claude.json`
+- install a `SessionStart` hook that auto-starts the local TokenPilot gateway on first use
 - install read-only Claude Code skill bridge entries under the local Claude skills directory
 - preserve existing Claude files as `.tokenpilot.bak` backups before rewriting
 - write a conservative `startup_timeout_sec` for the recovery MCP server
@@ -97,6 +98,10 @@ lightmem2 claude-code mode normal
 lightmem2 claude-code reduction status
 lightmem2 claude-code stabilizer target developer
 ```
+
+The Claude Code gateway is now auto-started from the installed `SessionStart`
+hook. After the first Claude Code session starts, `lightmem2 claude-code doctor`
+should report `proxy healthy: yes` without a separate manual start step.
 
 Claude Code currently supports `mode conservative` and `mode normal`.
 `mode aggressive` is not available on the current adapter.
