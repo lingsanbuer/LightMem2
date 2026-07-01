@@ -130,12 +130,34 @@ function shellQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
 }
 
-function tokenPilotHookCommand(adapterRoot: string): string {
-  return `${shellQuote(process.execPath)} ${shellQuote(join(adapterRoot, "dist", "hooks-handler.js"))}`;
+function hookWrapperPath(adapterRoot: string): string {
+  return join(adapterRoot, "dist", "tokenpilot-codex-hook.cmd");
 }
 
-export function resolveCodexHookCommandForInstall(): string {
-  return tokenPilotHookCommand(adapterRootFromHere());
+function hookScriptPath(adapterRoot: string): string {
+  return join(adapterRoot, "dist", "hooks-handler.js");
+}
+
+async function ensureWindowsHookWrapper(adapterRoot: string): Promise<string> {
+  const wrapperPath = hookWrapperPath(adapterRoot);
+  await mkdir(dirname(wrapperPath), { recursive: true });
+  await writeFile(wrapperPath, [
+    "@echo off",
+    `${shellQuote(process.execPath)} ${shellQuote(hookScriptPath(adapterRoot))} %*`,
+    "",
+  ].join("\r\n"), "utf8");
+  return wrapperPath;
+}
+
+async function tokenPilotHookCommand(adapterRoot: string, platform = process.platform): Promise<string> {
+  if (platform === "win32") {
+    return shellQuote(await ensureWindowsHookWrapper(adapterRoot));
+  }
+  return `${shellQuote(process.execPath)} ${shellQuote(hookScriptPath(adapterRoot))}`;
+}
+
+export async function resolveCodexHookCommandForInstall(platform = process.platform): Promise<string> {
+  return tokenPilotHookCommand(adapterRootFromHere(), platform);
 }
 
 export function resolveCodexMcpServerSpecForInstall(stateDir: string): TokenPilotMcpServerSpec {
@@ -163,7 +185,8 @@ function upsertTokenPilotHookGroup(groups: unknown, group: Record<string, unknow
     return hooks.some((hook) => {
       if (!hook || typeof hook !== "object") return false;
       const command = (hook as Record<string, unknown>).command;
-      return typeof command === "string" && command.includes("hooks-handler.js");
+      return typeof command === "string"
+        && (command.includes("hooks-handler.js") || command.includes("tokenpilot-codex-hook.cmd"));
     });
   };
   const filtered = list.filter((item) => !isTokenPilotGroup(item));
@@ -173,13 +196,14 @@ function upsertTokenPilotHookGroup(groups: unknown, group: Record<string, unknow
 async function installHooksJson(params: {
   hooksConfigPath: string;
   adapterRoot: string;
+  platform?: NodeJS.Platform;
 }): Promise<void> {
   const existing = existsSync(params.hooksConfigPath)
     ? JSON.parse(await readFile(params.hooksConfigPath, "utf8"))
     : {};
   const root = asHookConfig(existing);
   const hooks = asHookConfig(root.hooks);
-  const command = tokenPilotHookCommand(params.adapterRoot);
+  const command = await tokenPilotHookCommand(params.adapterRoot, params.platform);
   const handler = (statusMessage: string, timeout = 30) => ({
     type: "command",
     command,
@@ -217,6 +241,7 @@ export async function installCodexTokenPilot(params?: {
   providerName?: string;
   installHooks?: boolean;
   probeMcp?: boolean;
+  platform?: NodeJS.Platform;
 }): Promise<{
   codexConfigPath: string;
   tokenPilotConfigPath: string;
@@ -281,13 +306,14 @@ export async function installCodexTokenPilot(params?: {
     await installHooksJson({
       hooksConfigPath,
       adapterRoot: adapterRootFromHere(),
+      platform: params?.platform,
     });
   }
   migrateCodexThreadProviders({
     codexHome: dirname(codexConfigPath),
     activeProviderName,
   });
-  const expectedHookCommand = resolveCodexHookCommandForInstall();
+  const expectedHookCommand = await resolveCodexHookCommandForInstall(params?.platform);
   const mcpProbeResult = params?.probeMcp === false
     ? {
       ok: false,

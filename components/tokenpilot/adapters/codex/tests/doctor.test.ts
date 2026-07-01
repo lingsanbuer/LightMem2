@@ -191,6 +191,42 @@ test("inspectCodexDoctor reports partial hook installs explicitly", async () => 
   }
 });
 
+test("inspectCodexDoctor accepts Windows hook wrapper commands", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-doctor-hooks-win-"));
+  try {
+    const proxyPort = await reserveUnusedPort();
+    const codexConfigPath = join(dir, "config.toml");
+    const hooksConfigPath = join(dir, "hooks.json");
+    const tokenPilotConfigPath = join(dir, "tokenpilot.json");
+
+    await writeFile(codexConfigPath, "model_provider = \"tokenpilot\"\n", "utf8");
+    await writeFile(hooksConfigPath, JSON.stringify({
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: "D:\\LightMem2\\codex\\dist\\tokenpilot-codex-hook.cmd" }] }],
+        PreToolUse: [{ hooks: [{ type: "command", command: "D:\\LightMem2\\codex\\dist\\tokenpilot-codex-hook.cmd" }] }],
+        PostToolUse: [{ hooks: [{ type: "command", command: "D:\\LightMem2\\codex\\dist\\tokenpilot-codex-hook.cmd" }] }],
+        Stop: [{ hooks: [{ type: "command", command: "D:\\LightMem2\\codex\\dist\\tokenpilot-codex-hook.cmd" }] }],
+      },
+    }, null, 2), "utf8");
+    await mkdir(join(dir, "state"), { recursive: true });
+
+    const report = await inspectCodexDoctor({
+      config: normalizeTokenPilotCodexConfig({
+        stateDir: join(dir, "state"),
+        proxyPort,
+      }),
+      configPath: codexConfigPath,
+      hooksConfigPath,
+      tokenPilotConfigPath,
+    });
+
+    assert.equal(report.hooksInstalled, true);
+    assert.equal(report.hooksComplete, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("formatCodexDoctorReport includes remediation hints for drifted installs", async () => {
   const proxyPort = await reserveUnusedPort();
   const report = await inspectCodexDoctor({

@@ -59,7 +59,8 @@ function hookGroupHasTokenPilot(group: unknown): boolean {
   return hooks.some((entry) => {
     if (!entry || typeof entry !== "object") return false;
     const command = (entry as Record<string, unknown>).command;
-    return typeof command === "string" && command.includes("hooks-handler.js");
+    return typeof command === "string"
+      && (command.includes("hooks-handler.js") || command.includes("tokenpilot-codex-hook.cmd"));
   });
 }
 
@@ -153,7 +154,7 @@ export async function inspectCodexDoctor(params: {
   const daemon = await readDaemonStatus(params.config);
   const proxyBaseUrl = `http://127.0.0.1:${params.config.proxyPort}/v1`;
   const providerName = params.config.providerName || "tokenpilot";
-  const expectedHookCommand = resolveCodexHookCommandForInstall();
+  const expectedHookCommand = await resolveCodexHookCommandForInstall();
   const expectedMcpSpec = resolveCodexMcpServerSpecForInstall(params.config.stateDir);
   const tokenpilotProvider = await readCodexProviderFromToml(providerName, params.configPath);
   const mcp = await readCodexMcpServerFromToml(TOKENPILOT_MCP_SERVER_NAME, params.configPath);

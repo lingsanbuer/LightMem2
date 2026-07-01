@@ -134,3 +134,42 @@ test("installCodexTokenPilot reports degraded MCP mode when probe is skipped", a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("installCodexTokenPilot writes Windows hook wrappers into hooks.json", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-install-win-hook-"));
+  try {
+    const codexConfigPath = join(dir, "config.toml");
+    const hooksConfigPath = join(dir, "hooks.json");
+    const tokenPilotConfigPath = join(dir, "tokenpilot.json");
+    await writeFile(codexConfigPath, [
+      "model_provider = \"OPENAI\"",
+      "",
+      "[model_providers.OPENAI]",
+      "name = \"OpenAI\"",
+      "base_url = \"https://api.openai.com/v1\"",
+      "wire_api = \"responses\"",
+      "requires_openai_auth = true",
+      "",
+    ].join("\n"), "utf8");
+
+    const result = await installCodexTokenPilot({
+      codexConfigPath,
+      hooksConfigPath,
+      tokenPilotConfigPath,
+      platform: "win32",
+    });
+
+    assert.match(result.expectedHookCommand, /tokenpilot-codex-hook\.cmd"$/);
+
+    const hooks = JSON.parse(await readFile(hooksConfigPath, "utf8")) as {
+      hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
+    };
+    for (const eventName of ["SessionStart", "PreToolUse", "PostToolUse", "Stop"]) {
+      const entries = hooks.hooks?.[eventName]?.[0]?.hooks;
+      assert.ok(Array.isArray(entries), `${eventName} hook group missing`);
+      assert.match(String(entries[0]?.command ?? ""), /tokenpilot-codex-hook\.cmd"$/);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
