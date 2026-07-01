@@ -1,4 +1,5 @@
 export * from "./config.js";
+export * from "./daemon.js";
 export * from "./doctor.js";
 export * from "./gateway-runtime.js";
 export * from "./hook-runtime.js";
