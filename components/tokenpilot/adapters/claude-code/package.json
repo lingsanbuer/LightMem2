@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@tokenpilot/host-adapter": "workspace:*",
-    "@tokenpilot/mcp": "workspace:*"
+    "@tokenpilot/mcp": "workspace:*",
+    "@tokenpilot/product-surface": "workspace:*"
   },
   "scripts": {
     "build": "tsx build.ts",

@@ -1,4 +1,13 @@
 import {
+  readLatestUxEffect,
+  readUxSessionAggregate,
+} from "@tokenpilot/host-adapter";
+import {
+  formatSessionReport,
+  readRecentReductionMetrics,
+  type ProductSurfaceSessionOverviewItem,
+} from "@tokenpilot/product-surface";
+import {
   loadClaudeCodeRecentTurnBindings,
   loadClaudeCodeSessionSnapshot,
   resolveLatestClaudeCodeSessionId,
@@ -72,4 +81,54 @@ export async function resolveClaudeCodeSessionTopology(
     updatedAt: normalizeSessionId(snapshot?.updatedAt) ?? normalizeSessionId(bindings[0]?.updatedAt),
     turnCount: bindings.length,
   };
+}
+
+export async function renderClaudeCodeSessionReport(stateDir: string, sessionRef?: string): Promise<string> {
+  const topology = await resolveClaudeCodeSessionTopology(stateDir, sessionRef);
+  if (!topology) return "No Claude Code TokenPilot session data found.";
+
+  const [aggregate, latestEffect, recentMetrics] = await Promise.all([
+    readUxSessionAggregate(stateDir, topology.sessionId),
+    readLatestUxEffect(stateDir),
+    readRecentReductionMetrics(stateDir, topology.sessionId),
+  ]);
+
+  const overview: ProductSurfaceSessionOverviewItem[] = [
+    { label: "Session", value: topology.sessionId },
+    { label: "Turns", value: topology.turnCount },
+    { label: "Model", value: topology.latestModel ?? "unknown" },
+    { label: "Workspace", value: topology.workspaceHint ?? "unknown" },
+    { label: "Latest response", value: topology.latestResponseId ?? "unknown" },
+    { label: "Previous response", value: topology.previousResponseId ?? "unknown" },
+    { label: "Latest request chars", value: topology.requestChars ?? 0 },
+    { label: "Latest response chars", value: topology.responseChars ?? 0 },
+    { label: "Latest assistant chars", value: topology.assistantChars ?? 0 },
+    { label: "Latest reduction savings", value: topology.reductionSavedChars ?? 0 },
+  ];
+
+  if (topology.lastToolName) {
+    overview.push({ label: "Last tool", value: topology.lastToolName });
+  }
+  if (topology.responseChain.length > 0) {
+    overview.push({ label: "Response chain", value: topology.responseChain.join(" -> ") });
+  }
+
+  if (!aggregate) {
+    return [
+      ...overview.map((item) => `${item.label}: ${item.value}`),
+      "TokenPilot Claude Code report:",
+      `- session: ${topology.sessionId}`,
+      "- no savings recorded yet",
+    ].join("\n");
+  }
+
+  return formatSessionReport({
+    title: "TokenPilot Claude Code report:",
+    sessionId: topology.sessionId,
+    aggregate,
+    latest: latestEffect?.sessionId === topology.sessionId ? latestEffect : null,
+    detailsEnabled: true,
+    recentMetrics,
+    overview,
+  });
 }

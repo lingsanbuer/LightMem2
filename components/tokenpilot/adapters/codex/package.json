@@ -20,6 +20,7 @@
     "@tokenpilot/host-adapter": "workspace:*",
     "@tokenpilot/kernel": "workspace:*",
     "@tokenpilot/mcp": "workspace:*",
+    "@tokenpilot/product-surface": "workspace:*",
     "@tokenpilot/runtime-core": "workspace:*"
   },
   "scripts": {

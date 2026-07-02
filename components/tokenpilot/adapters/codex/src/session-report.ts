@@ -1,4 +1,13 @@
 import {
+  readLatestUxEffect,
+  readUxSessionAggregate,
+} from "@tokenpilot/host-adapter";
+import {
+  formatSessionReport,
+  readRecentReductionMetrics,
+  type ProductSurfaceSessionOverviewItem,
+} from "@tokenpilot/product-surface";
+import {
   loadCodexRecentTurnBindings,
   loadCodexSessionSnapshot,
   resolveCanonicalCodexSessionId,
@@ -64,4 +73,47 @@ export async function resolveCodexSessionTopology(
     updatedAt: normalizeSessionId(snapshot?.updatedAt) ?? normalizeSessionId(bindings[0]?.updatedAt),
     turnCount: bindings.length,
   };
+}
+
+export async function renderCodexSessionReport(stateDir: string, sessionRef?: string): Promise<string> {
+  const topology = await resolveCodexSessionTopology(stateDir, sessionRef);
+  if (!topology) return "No Codex TokenPilot session data found.";
+
+  const [aggregate, latestEffect, recentMetrics] = await Promise.all([
+    readUxSessionAggregate(stateDir, topology.sessionId),
+    readLatestUxEffect(stateDir),
+    readRecentReductionMetrics(stateDir, topology.sessionId),
+  ]);
+
+  const overview: ProductSurfaceSessionOverviewItem[] = [
+    { label: "Session", value: topology.sessionId },
+    { label: "Turns", value: topology.turnCount },
+    { label: "Model", value: topology.latestModel ?? "unknown" },
+    { label: "Workspace", value: topology.workspaceHint ?? "unknown" },
+    { label: "Latest response", value: topology.latestResponseId ?? "unknown" },
+    { label: "Previous response", value: topology.previousResponseId ?? "unknown" },
+  ];
+
+  if (topology.responseChain.length > 0) {
+    overview.push({ label: "Response chain", value: topology.responseChain.join(" -> ") });
+  }
+
+  if (!aggregate) {
+    return [
+      ...overview.map((item) => `${item.label}: ${item.value}`),
+      "TokenPilot Codex report:",
+      `- session: ${topology.sessionId}`,
+      "- no savings recorded yet",
+    ].join("\n");
+  }
+
+  return formatSessionReport({
+    title: "TokenPilot Codex report:",
+    sessionId: topology.sessionId,
+    aggregate,
+    latest: latestEffect?.sessionId === topology.sessionId ? latestEffect : null,
+    detailsEnabled: true,
+    recentMetrics,
+    overview,
+  });
 }
