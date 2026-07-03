@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, symlink, unlink } from "node:fs/promises";
+import { chmod, mkdir, symlink, unlink } from "node:fs/promises";
 import { join, resolve, delimiter } from "node:path";
 
 function cliDistPathFromAdapterRoot(adapterRoot: string): string {
@@ -37,8 +37,10 @@ export async function installLightmem2CliBin(params: {
   }
 
   await mkdir(binDir, { recursive: true });
+  await chmod(cliDistPath, 0o755).catch(() => undefined);
   await unlink(binPath).catch(() => undefined);
   await symlink(cliDistPath, binPath);
+  await chmod(binPath, 0o755).catch(() => undefined);
 
   return {
     installed: true,

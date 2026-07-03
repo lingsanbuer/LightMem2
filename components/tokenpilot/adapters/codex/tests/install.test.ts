@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { lstat, mkdtemp, mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
@@ -103,6 +103,28 @@ test("installCodexTokenPilot reports degraded MCP mode when probe is skipped", a
     assert.equal(result.mcpProbe.degraded, true);
     assert.match(result.mcpProbe.detail, /skipped/i);
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("installCodexTokenPilot restores execute permission on the shared lightmem2 CLI target", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-codex-install-cli-perm-"));
+  const cliDistPath = resolve(__dirname, "..", "..", "..", "products", "cli", "dist", "cli.js");
+  const originalMode = (await stat(cliDistPath)).mode & 0o777;
+  try {
+    await chmod(cliDistPath, 0o644);
+    const result = await installCodexTokenPilot({
+      codexConfigPath: join(dir, "config.toml"),
+      hooksConfigPath: join(dir, "hooks.json"),
+      tokenPilotConfigPath: join(dir, "tokenpilot.json"),
+      cliBinDir: join(dir, "bin"),
+      probeMcp: false,
+    });
+
+    assert.equal(result.cliBinInstalled, true);
+    assert.equal(((await stat(cliDistPath)).mode & 0o111) !== 0, true);
+  } finally {
+    await chmod(cliDistPath, originalMode).catch(() => undefined);
     await rm(dir, { recursive: true, force: true });
   }
 });
