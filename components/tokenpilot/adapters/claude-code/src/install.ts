@@ -23,6 +23,7 @@ import {
   defaultClaudeCodeSkillBridgeDir,
   installCommandSkillBridge,
 } from "../../shared/command-skill-bridge.js";
+import { installLightmem2CliBin } from "../../shared/cli-bin-install.js";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -128,6 +129,7 @@ export async function installClaudeCodeTokenPilot(params?: {
   tokenPilotConfigPath?: string;
   mcpConfigPath?: string;
   probeMcp?: boolean;
+  cliBinDir?: string;
 }): Promise<{
   settingsPath: string;
   mcpConfigPath: string;
@@ -146,6 +148,10 @@ export async function installClaudeCodeTokenPilot(params?: {
   expectedMcpStartupTimeoutSec: number;
   commandSkillsDir: string;
   commandSkillNames: string[];
+  cliBinInstalled: boolean;
+  cliBinPath: string;
+  cliBinDir: string;
+  cliBinDirOnPath: boolean;
   mcpProbe: {
     ok: boolean;
     detail: string;
@@ -220,6 +226,10 @@ export async function installClaudeCodeTokenPilot(params?: {
     host: "claude-code",
     style: "claude",
   });
+  const cliBin = await installLightmem2CliBin({
+    adapterRoot: adapterRootFromHere(),
+    binDir: params?.cliBinDir,
+  });
   const mcpProbe = params?.probeMcp === false
     ? {
       ok: false,
@@ -250,6 +260,10 @@ export async function installClaudeCodeTokenPilot(params?: {
     expectedMcpStartupTimeoutSec: DEFAULT_TOKENPILOT_MCP_STARTUP_TIMEOUT_SEC,
     commandSkillsDir: commandSkillBridge.skillsDir,
     commandSkillNames: commandSkillBridge.skillNames,
+    cliBinInstalled: cliBin.installed,
+    cliBinPath: cliBin.binPath,
+    cliBinDir: cliBin.binDir,
+    cliBinDirOnPath: cliBin.binDirOnPath,
     mcpProbe: {
       ...mcpProbe,
       degraded: !mcpProbe.ok,

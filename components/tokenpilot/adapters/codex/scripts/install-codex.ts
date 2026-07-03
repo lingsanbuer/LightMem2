@@ -13,6 +13,10 @@ installCodexTokenPilot({
   console.log(`Recovery MCP startup timeout: ${result.expectedMcpStartupTimeoutSec}s`);
   console.log(`Command skills dir: ${result.commandSkillsDir}`);
   console.log(`Command skills: ${result.commandSkillNames.join(", ")}`);
+  console.log(`lightmem2 CLI bin: ${result.cliBinInstalled ? `installed at ${result.cliBinPath}` : `skipped (missing build at ${result.cliBinPath})`}`);
+  if (!result.cliBinDirOnPath) {
+    console.log(`lightmem2 CLI PATH note: add ${result.cliBinDir} to PATH if 'lightmem2' is unavailable.`);
+  }
   console.log(`Recovery MCP probe: ${result.mcpProbe.ok ? "ok" : "degraded"}`);
   console.log(`Recovery MCP probe detail: ${result.mcpProbe.detail}`);
   console.log(`Proxy base URL: ${result.baseUrl}`);

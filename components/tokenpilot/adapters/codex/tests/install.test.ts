@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
@@ -17,6 +17,7 @@ test("installCodexTokenPilot writes provider, MCP, and hooks with expected comma
     const codexConfigPath = join(dir, "config.toml");
     const hooksConfigPath = join(dir, "hooks.json");
     const tokenPilotConfigPath = join(dir, "tokenpilot.json");
+    const cliBinDir = join(dir, "bin");
     await writeFile(codexConfigPath, [
       "model_provider = \"OPENAI\"",
       "",
@@ -32,6 +33,7 @@ test("installCodexTokenPilot writes provider, MCP, and hooks with expected comma
       codexConfigPath,
       hooksConfigPath,
       tokenPilotConfigPath,
+      cliBinDir,
     });
 
     const codexToml = await readFile(codexConfigPath, "utf8");
@@ -58,6 +60,12 @@ test("installCodexTokenPilot writes provider, MCP, and hooks with expected comma
       "lightmem2-doctor",
       "lightmem2-visual",
     ]);
+    assert.equal(result.cliBinInstalled, true);
+    assert.equal(result.cliBinPath, join(cliBinDir, "lightmem2"));
+    assert.equal(result.cliBinDir, cliBinDir);
+    assert.equal(result.cliBinDirOnPath, false);
+    assert.equal((await lstat(result.cliBinPath)).isSymbolicLink(), true);
+    assert.match(await readlink(result.cliBinPath), /products[\/\\]cli[\/\\]dist[\/\\]cli\.js$/);
     const tokenPilotConfig = await loadTokenPilotCodexConfig(tokenPilotConfigPath);
     assert.equal(tokenPilotConfig.upstreamProvider, "OPENAI");
     assert.equal(tokenPilotConfig.upstream?.baseUrl, "https://api.openai.com/v1");

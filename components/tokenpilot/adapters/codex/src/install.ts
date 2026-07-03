@@ -24,6 +24,7 @@ import {
   defaultCodexSkillBridgeDir,
   installCommandSkillBridge,
 } from "../../shared/command-skill-bridge.js";
+import { installLightmem2CliBin } from "../../shared/cli-bin-install.js";
 
 function quoteToml(value: string): string {
   return JSON.stringify(value);
@@ -337,6 +338,7 @@ export async function installCodexTokenPilot(params?: {
   installHooks?: boolean;
   probeMcp?: boolean;
   platform?: NodeJS.Platform;
+  cliBinDir?: string;
 }): Promise<{
   codexConfigPath: string;
   tokenPilotConfigPath: string;
@@ -352,6 +354,10 @@ export async function installCodexTokenPilot(params?: {
   expectedMcpStartupTimeoutSec: number;
   commandSkillsDir: string;
   commandSkillNames: string[];
+  cliBinInstalled: boolean;
+  cliBinPath: string;
+  cliBinDir: string;
+  cliBinDirOnPath: boolean;
   mcpProbe: {
     ok: boolean;
     detail: string;
@@ -430,6 +436,10 @@ export async function installCodexTokenPilot(params?: {
     host: "codex",
     style: "codex",
   });
+  const cliBin = await installLightmem2CliBin({
+    adapterRoot: adapterRootFromHere(),
+    binDir: params?.cliBinDir,
+  });
   const expectedHookCommand = await resolveCodexHookCommandForInstall(params?.platform);
   const mcpProbeResult = params?.probeMcp === false
     ? {
@@ -458,6 +468,10 @@ export async function installCodexTokenPilot(params?: {
     expectedMcpStartupTimeoutSec: DEFAULT_TOKENPILOT_MCP_STARTUP_TIMEOUT_SEC,
     commandSkillsDir: commandSkillBridge.skillsDir,
     commandSkillNames: commandSkillBridge.skillNames,
+    cliBinInstalled: cliBin.installed,
+    cliBinPath: cliBin.binPath,
+    cliBinDir: cliBin.binDir,
+    cliBinDirOnPath: cliBin.binDirOnPath,
     mcpProbe: {
       ...mcpProbeResult,
       degraded: !mcpProbeResult.ok,

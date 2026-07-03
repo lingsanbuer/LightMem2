@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { installClaudeCodeTokenPilot, resolveClaudeCodeHookCommandForInstall } from "../src/install.js";
@@ -11,6 +11,7 @@ test("installClaudeCodeTokenPilot writes settings, MCP config, and backups exist
     const settingsPath = join(dir, "settings.json");
     const mcpConfigPath = join(dir, ".claude.json");
     const tokenPilotConfigPath = join(dir, "tokenpilot.json");
+    const cliBinDir = join(dir, "bin");
 
     await writeFile(settingsPath, `${JSON.stringify({ env: { KEEP_ME: "1" } }, null, 2)}\n`, "utf8");
     await writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: { existing: { command: "node" } } }, null, 2)}\n`, "utf8");
@@ -19,6 +20,7 @@ test("installClaudeCodeTokenPilot writes settings, MCP config, and backups exist
       settingsPath,
       mcpConfigPath,
       tokenPilotConfigPath,
+      cliBinDir,
     });
 
     assert.equal(result.settingsBackedUp, true);
@@ -58,6 +60,12 @@ test("installClaudeCodeTokenPilot writes settings, MCP config, and backups exist
       "lightmem2-doctor",
       "lightmem2-visual",
     ]);
+    assert.equal(result.cliBinInstalled, true);
+    assert.equal(result.cliBinPath, join(cliBinDir, "lightmem2"));
+    assert.equal(result.cliBinDir, cliBinDir);
+    assert.equal(result.cliBinDirOnPath, false);
+    assert.equal((await lstat(result.cliBinPath)).isSymbolicLink(), true);
+    assert.match(await readlink(result.cliBinPath), /products[\/\\]cli[\/\\]dist[\/\\]cli\.js$/);
     assert.match(result.expectedHookCommand, /hooks-handler\.(js|ts)/);
     assert.ok(result.expectedMcpArgs.length > 0);
     assert.equal(result.expectedMcpStartupTimeoutSec, 90);

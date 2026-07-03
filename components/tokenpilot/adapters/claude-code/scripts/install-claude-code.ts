@@ -18,6 +18,8 @@ async function main() {
     `- expected MCP startup timeout: ${result.expectedMcpStartupTimeoutSec}s`,
     `- command skills dir: ${result.commandSkillsDir}`,
     `- command skills: ${result.commandSkillNames.join(", ")}`,
+    `- lightmem2 CLI bin: ${result.cliBinInstalled ? `installed at ${result.cliBinPath}` : `skipped (missing build at ${result.cliBinPath})`}`,
+    ...(!result.cliBinDirOnPath ? [`- lightmem2 CLI PATH note: add ${result.cliBinDir} to PATH if 'lightmem2' is unavailable.`] : []),
     `- tool search env: ${result.toolSearchEnvName}=${result.toolSearchEnvValue}`,
     `- recovery MCP server: ${result.mcpServerName}`,
     `- recovery MCP probe: ${result.mcpProbe.ok ? "ok" : "degraded"}`,
