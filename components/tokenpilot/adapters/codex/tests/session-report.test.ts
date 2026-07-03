@@ -85,6 +85,10 @@ test("codex session report renders topology and recent reduction metrics", async
     assert.match(report, /TokenPilot Codex report:/);
     assert.match(report, /saved chars: 800/i);
     assert.match(report, /latest request savings: 800 chars/i);
+    assert.match(report, /recent total savings: 800 chars/i);
+    assert.match(report, /recent dominant route: code_like=500 chars \(62\.5%, 2 hits\)/i);
+    assert.match(report, /recent most-trimmed route: code_like=2 hits/i);
+    assert.match(report, /recent dominant pass: tool_payload_trim=700 chars/i);
     assert.match(report, /recent top routes: code_like=500 chars\/2 hits, readme_doc=300 chars\/1 hits/i);
     assert.match(report, /recent top passes: tool_payload_trim=700 chars, read_state_compaction=100 chars/i);
     assert.match(report, /recent recovery segments: observed=2, exempted=2/i);

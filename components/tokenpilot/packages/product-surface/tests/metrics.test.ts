@@ -142,6 +142,10 @@ test("formatSessionReport includes recent route and pass metrics when provided",
   assert.match(text, /^Model: gpt-5\.4/m);
   assert.match(text, /TokenPilot Codex report:/);
   assert.match(text, /recent sampled turns: 3/);
+  assert.match(text, /recent total savings: 1,200 chars/);
+  assert.match(text, /recent dominant route: code_like=900 chars \(75%, 4 hits\)/);
+  assert.match(text, /recent most-trimmed route: code_like=4 hits/);
+  assert.match(text, /recent dominant pass: tool_payload_trim=1,000 chars/);
   assert.match(text, /recent top routes: code_like=900 chars\/4 hits, task_doc=300 chars\/1 hits/);
   assert.match(text, /recent top passes: tool_payload_trim=1,000 chars, read_state_compaction=200 chars/);
   assert.match(text, /recent recovery segments: observed=3, exempted=3/);

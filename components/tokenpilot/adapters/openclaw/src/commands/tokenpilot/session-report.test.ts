@@ -110,6 +110,10 @@ test("openclaw handleReport includes recent metrics and recovery aggregates when
     assert.match(result.text, /saved chars: 900/i);
     assert.match(result.text, /latest request savings: 240 chars/i);
     assert.match(result.text, /latest response savings: 60 chars/i);
+    assert.match(result.text, /recent total savings: 600 chars/i);
+    assert.match(result.text, /recent dominant route: search_results=300 chars \(50%, 2 hits\)/i);
+    assert.match(result.text, /recent most-trimmed route: search_results=2 hits/i);
+    assert.match(result.text, /recent dominant pass: tool_payload_trim=360 chars/i);
     assert.match(result.text, /recent top routes: search_results=300 chars\/2 hits, task_doc=180 chars\/1 hits, diff_output=120 chars\/1 hits/i);
     assert.match(result.text, /recent top passes: tool_payload_trim=360 chars, read_state_compaction=80 chars/i);
     assert.match(result.text, /recent recovery segments: observed=3, exempted=3/i);

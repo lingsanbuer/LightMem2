@@ -91,6 +91,10 @@ test("claude-code session report renders topology and recent reduction metrics",
     assert.match(report, /TokenPilot Claude Code report:/);
     assert.match(report, /saved chars: 500/i);
     assert.match(report, /latest request savings: 500 chars/i);
+    assert.match(report, /recent total savings: 500 chars/i);
+    assert.match(report, /recent dominant route: log_output=320 chars \(64%, 2 hits\)/i);
+    assert.match(report, /recent most-trimmed route: log_output=2 hits/i);
+    assert.match(report, /recent dominant pass: tool_payload_trim=400 chars/i);
     assert.match(report, /recent top routes: log_output=320 chars\/2 hits, task_doc=180 chars\/1 hits/i);
     assert.match(report, /recent top passes: tool_payload_trim=400 chars, exec_output_truncation=100 chars/i);
     assert.match(report, /recent recovery segments: observed=1, exempted=1/i);
