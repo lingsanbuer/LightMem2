@@ -64,6 +64,9 @@ test("gateway runtime serves health and forwards Claude Messages requests", asyn
     config: normalizeTokenPilotClaudeCodeConfig({
       stateDir: join(dir, "state"),
       proxyPort,
+      hooks: {
+        dynamicContextTarget: "user",
+      },
     }),
     logger: createConsoleLogger(false),
     forwarder,
@@ -426,6 +429,9 @@ test("gateway runtime applies stable-prefix rewrite before forwarding", async ()
     config: normalizeTokenPilotClaudeCodeConfig({
       stateDir: join(dir, "state"),
       proxyPort,
+      hooks: {
+        dynamicContextTarget: "user",
+      },
     }),
     logger: createConsoleLogger(false),
     forwarder,
@@ -466,6 +472,85 @@ test("gateway runtime applies stable-prefix rewrite before forwarding", async ()
     const forwardedMessages = seenPayloads[0]?.messages as Array<Record<string, unknown>>;
     const forwardedUserBlocks = forwardedMessages?.[0]?.content as Array<Record<string, unknown>>;
     assert.equal(Array.isArray(forwardedUserBlocks), true);
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("gateway runtime supports developer-targeted stable-prefix injection", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-gateway-devtarget-"));
+  const proxyPort = await reserveUnusedPort();
+  const seenPayloads: Record<string, unknown>[] = [];
+  const forwarder: HostGatewayForwarder = {
+    async request(params) {
+      seenPayloads.push(params.payload as Record<string, unknown>);
+      return {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+        text: JSON.stringify({
+          id: "msg_test_3",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+        }),
+      };
+    },
+    async requestStream() {
+      throw new Error("stream path should not be used in this test");
+    },
+  };
+
+  const runtime = await startClaudeCodeGatewayRuntime({
+    config: normalizeTokenPilotClaudeCodeConfig({
+      stateDir: join(dir, "state"),
+      proxyPort,
+      hooks: {
+        dynamicContextTarget: "developer",
+      },
+    }),
+    logger: createConsoleLogger(false),
+    forwarder,
+  });
+
+  try {
+    const requestResp = await fetch(`${runtime.baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-session-id": "sess-runtime-3",
+      },
+      body: JSON.stringify({
+        model: "tokenpilot/claude-sonnet-4-6",
+        stream: false,
+        system: "Your working directory is: /tmp/demo\nRuntime: agent=agent-123 |\nBe precise.",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "hello" }],
+          },
+        ],
+        max_tokens: 256,
+      }),
+    });
+
+    assert.equal(requestResp.status, 200);
+    assert.equal(seenPayloads.length, 1);
+    assert.match(String(seenPayloads[0]?.system ?? ""), /Your working directory is: <WORKDIR>/);
+    assert.match(String(seenPayloads[0]?.system ?? ""), /Runtime: agent=<AGENT_ID> \|/);
+    assert.match(String(seenPayloads[0]?.system ?? ""), /WORKDIR: \/tmp\/demo/);
+    assert.match(String(seenPayloads[0]?.system ?? ""), /AGENT_ID: agent-123/);
+
+    const forwardedMessages = seenPayloads[0]?.messages as Array<Record<string, unknown>>;
+    const forwardedUserBlocks = forwardedMessages?.[0]?.content as Array<Record<string, unknown>>;
+    assert.equal(String(forwardedUserBlocks?.[0]?.text ?? ""), "hello");
+
+    const visual = await readVisualSessionData(join(dir, "state"), "sess-runtime-3");
+    assert.equal(visual.stability.length, 1);
+    assert.equal(visual.stability[0]?.dynamicContextTarget, "developer");
+    assert.match(visual.stability[0]?.developerForwarded ?? "", /WORKDIR: \/tmp\/demo/);
   } finally {
     await runtime.close();
     await rm(dir, { recursive: true, force: true });

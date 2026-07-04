@@ -199,7 +199,7 @@ export async function startClaudeCodeGatewayRuntime(params: {
             return prepared.diagnostics.stablePrefixApplied === true
               ? {
                 originalEnvelope,
-                dynamicContextTarget: "user",
+                dynamicContextTarget: config.hooks.dynamicContextTarget,
                 getDeveloperText(envelope) {
                   return typeof envelope.instructions === "string" ? envelope.instructions : "";
                 },

@@ -1,53 +1,20 @@
 import {
-  extractContentText,
-  prependTextToContent,
+  applyStablePrefixToInstructions,
   replaceContentText,
-  rewriteTextForStablePrefix,
   type HostRequestEnvelope,
 } from "@tokenpilot/host-adapter";
 import type { TokenPilotClaudeCodeConfig } from "./config.js";
-
-function findFirstUserIndex(messages: HostRequestEnvelope["messages"]): number {
-  return messages.findIndex((message) => message?.role === "user");
-}
 
 export function prepareClaudeStablePrefix(
   envelope: HostRequestEnvelope,
   config: TokenPilotClaudeCodeConfig,
 ): HostRequestEnvelope {
   if (!config.modules.stabilizer) return envelope;
-
-  const sourceInstructions = typeof envelope.instructions === "string" ? envelope.instructions : "";
-  if (!sourceInstructions.trim()) return envelope;
-
-  const rewrite = rewriteTextForStablePrefix(sourceInstructions);
-  if (!rewrite.changed) return envelope;
-
-  let nextMessages = envelope.messages;
-  let changed = rewrite.forwardedText !== sourceInstructions;
-
-  if (rewrite.dynamicContextText) {
-    const userIndex = findFirstUserIndex(envelope.messages);
-    if (userIndex >= 0) {
-      const userMessage = envelope.messages[userIndex];
-      const currentText = extractContentText(userMessage.content);
-      if (!currentText.includes(rewrite.dynamicContextText)) {
-        nextMessages = envelope.messages.slice();
-        nextMessages[userIndex] = {
-          ...userMessage,
-          content: prependTextToContent(userMessage.content, rewrite.dynamicContextText),
-        };
-        changed = true;
-      }
-    }
-  }
-
-  if (!changed) return envelope;
-  return {
-    ...envelope,
-    instructions: rewrite.forwardedText,
-    messages: nextMessages,
-  };
+  return applyStablePrefixToInstructions({
+    envelope,
+    dynamicContextTarget: config.hooks.dynamicContextTarget,
+    mergeDynamicContextIntoInstructions: config.hooks.dynamicContextTarget === "developer",
+  });
 }
 
 export function replaceClaudeMessageText(
