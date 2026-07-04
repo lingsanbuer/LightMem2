@@ -150,14 +150,16 @@ test("Codex host e2e wires install, proxy reduction, report/visual, and MCP reco
     assert.equal(response.status, 200);
     assert.equal(upstream.requests.length, 1);
     assert.equal(upstream.requests[0]?.model, "gpt-5.4-mini");
-    assert.match(String(upstream.requests[0]?.instructions ?? ""), /Your working directory is: \/repo\/demo/);
-    assert.match(String(upstream.requests[0]?.instructions ?? ""), /Runtime: agent=agent-123 \|/);
+    assert.match(String(upstream.requests[0]?.instructions ?? ""), /Your working directory is: <WORKDIR>/);
+    assert.match(String(upstream.requests[0]?.instructions ?? ""), /Runtime: agent=<AGENT_ID> \|/);
     assertRecoveryProtocolText(String(upstream.requests[0]?.instructions ?? ""));
 
     const forwardedInput = upstream.requests[0]?.input as Array<Record<string, unknown>>;
     assert.ok(Array.isArray(forwardedInput));
     const firstUser = forwardedInput.find((item) => item?.role === "user");
     const firstBlocks = firstUser?.content as Array<Record<string, unknown>>;
+    assert.match(String(firstBlocks?.[0]?.text ?? ""), /WORKDIR: \/repo\/demo/);
+    assert.match(String(firstBlocks?.[0]?.text ?? ""), /AGENT_ID: agent-123/);
 
     const reducedToolItem = forwardedInput.find((item) => String(item?.type ?? "").toLowerCase() === "function_call_output");
     const reducedOutput = String(reducedToolItem?.output ?? "");

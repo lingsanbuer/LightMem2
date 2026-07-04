@@ -1,16 +1,22 @@
 import { createHash } from "node:crypto";
 import {
+  applyStablePrefixToInstructions,
+  applyStablePrefixToMessage,
   extractContentText,
-  prependTextToContent,
-  replaceContentText,
+  findFirstUserMessageIndex,
   rewriteTextForStablePrefix,
   type HostRequestEnvelope,
 } from "@tokenpilot/host-adapter";
 import type { TokenPilotCodexConfig } from "./config.js";
 
-function computeStablePromptCacheKey(model: string): string {
+function computeStablePromptCacheKey(model: string, stableTexts: string[]): string {
   const digest = createHash("sha256")
-    .update(JSON.stringify({ v: 1, host: "codex", model, stable: true }))
+    .update(JSON.stringify({
+      v: 2,
+      host: "codex",
+      model,
+      stableTexts: stableTexts.filter((text) => text.trim().length > 0),
+    }))
     .digest("hex")
     .slice(0, 24);
   return `lightmem2-codex-${digest}`;
@@ -32,8 +38,51 @@ function findRootPromptCandidate(messages: HostRequestEnvelope["messages"]): {
   return null;
 }
 
-function findFirstUserIndex(messages: HostRequestEnvelope["messages"]): number {
-  return messages.findIndex((message: any) => message?.role === "user");
+function hasDeveloperDynamicContextMessage(
+  messages: HostRequestEnvelope["messages"],
+  dynamicContextText: string,
+): boolean {
+  const target = dynamicContextText.trim();
+  if (!target) return true;
+  return messages.some((message: any) => {
+    if (!message || typeof message !== "object") return false;
+    if (message.role !== "system") return false;
+    const originalRole = message.metadata?.__codexOriginalRole;
+    if (originalRole !== "developer" && originalRole !== "system") return false;
+    return extractContentText(message.content).trim() === target;
+  });
+}
+
+function insertDeveloperDynamicContextMessage(params: {
+  envelope: HostRequestEnvelope;
+  dynamicContextText: string;
+  afterMessageIndex?: number;
+}): HostRequestEnvelope {
+  const dynamicContextText = params.dynamicContextText.trim();
+  if (!dynamicContextText) return params.envelope;
+  if (hasDeveloperDynamicContextMessage(params.envelope.messages, dynamicContextText)) {
+    return params.envelope;
+  }
+
+  const insertAt =
+    typeof params.afterMessageIndex === "number"
+      ? Math.max(0, Math.min(params.envelope.messages.length, params.afterMessageIndex + 1))
+      : (() => {
+          const userIndex = findFirstUserMessageIndex(params.envelope.messages);
+          return userIndex >= 0 ? userIndex : params.envelope.messages.length;
+        })();
+  const nextMessages = params.envelope.messages.slice();
+  nextMessages.splice(insertAt, 0, {
+    role: "system",
+    content: dynamicContextText,
+    metadata: {
+      __codexOriginalRole: "developer",
+    },
+  } as HostRequestEnvelope["messages"][number]);
+  return {
+    ...params.envelope,
+    messages: nextMessages,
+  };
 }
 
 export function prepareCodexStablePrefix(
@@ -43,52 +92,64 @@ export function prepareCodexStablePrefix(
   if (!config.modules.stabilizer || config.proxyMode.pureForward) return envelope;
 
   const candidate = findRootPromptCandidate(envelope.messages);
-  if (!candidate) return envelope;
-  const rewrite = rewriteTextForStablePrefix(candidate.text);
+  const instructionText = typeof envelope.instructions === "string" ? envelope.instructions : "";
+  const instructionRewrite = instructionText.trim()
+    ? rewriteTextForStablePrefix(instructionText)
+    : null;
+  const rootRewrite = candidate ? rewriteTextForStablePrefix(candidate.text) : null;
+  const dynamicContextText = rootRewrite?.dynamicContextText || instructionRewrite?.dynamicContextText || "";
+  const target = config.hooks.dynamicContextTarget;
 
-  let nextMessages = envelope.messages;
-  let changed = false;
-
-  if (rewrite.changed) {
-    nextMessages = envelope.messages.slice();
-    const targetMessage = nextMessages[candidate.index] as any;
-    const developerForwardedText =
-      config.hooks.dynamicContextTarget === "developer" && rewrite.dynamicContextText
-        ? `${rewrite.forwardedText}\n\n${rewrite.dynamicContextText}`
-        : rewrite.forwardedText;
-    nextMessages[candidate.index] = {
-      ...targetMessage,
-      content: replaceContentText(targetMessage.content, developerForwardedText),
-    };
-    changed = true;
+  let rewrittenEnvelope = envelope;
+  if (instructionRewrite?.changed) {
+    rewrittenEnvelope = applyStablePrefixToInstructions({
+      envelope: rewrittenEnvelope,
+      dynamicContextTarget: target,
+      mergeDynamicContextIntoInstructions: false,
+    });
   }
-
-  if (rewrite.dynamicContextText && config.hooks.dynamicContextTarget === "user") {
-    const userIndex = findFirstUserIndex(nextMessages);
-    if (userIndex >= 0) {
-      const userMessage = nextMessages[userIndex] as any;
-      const currentText = extractContentText(userMessage.content);
-      if (!currentText.includes(rewrite.dynamicContextText)) {
-        if (nextMessages === envelope.messages) nextMessages = envelope.messages.slice();
-        nextMessages[userIndex] = {
-          ...userMessage,
-          content: prependTextToContent(userMessage.content, rewrite.dynamicContextText),
-        };
-        changed = true;
+  if (candidate && rootRewrite?.changed) {
+    const nextCandidate = findRootPromptCandidate(rewrittenEnvelope.messages);
+    if (nextCandidate) {
+      rewrittenEnvelope = applyStablePrefixToMessage({
+        envelope: rewrittenEnvelope,
+        messageIndex: nextCandidate.index,
+        dynamicContextTarget: target,
+        mergeDynamicContextIntoMessage: false,
+      });
+      if (target === "developer" && dynamicContextText) {
+        rewrittenEnvelope = insertDeveloperDynamicContextMessage({
+          envelope: rewrittenEnvelope,
+          dynamicContextText,
+          afterMessageIndex: nextCandidate.index,
+        });
       }
     }
+  } else if (target === "developer" && dynamicContextText) {
+    rewrittenEnvelope = insertDeveloperDynamicContextMessage({
+      envelope: rewrittenEnvelope,
+      dynamicContextText,
+    });
   }
 
+  const stablePromptParts = [
+    instructionRewrite?.canonicalText ?? instructionText,
+    rootRewrite?.canonicalText ?? candidate?.text ?? "",
+  ];
+  const existingPromptCacheKey =
+    typeof rewrittenEnvelope.metadata?.promptCacheKey === "string"
+      ? rewrittenEnvelope.metadata.promptCacheKey.trim()
+      : "";
+
   const nextMetadata = {
-    ...(envelope.metadata ?? {}),
-    promptCacheKey: computeStablePromptCacheKey(envelope.model),
+    ...(rewrittenEnvelope.metadata ?? {}),
+    promptCacheKey: existingPromptCacheKey || computeStablePromptCacheKey(envelope.model, stablePromptParts),
     promptCacheRetention: "24h",
   };
 
-  return changed || nextMetadata.promptCacheKey !== envelope.metadata?.promptCacheKey
+  return rewrittenEnvelope !== envelope || nextMetadata.promptCacheKey !== envelope.metadata?.promptCacheKey
     ? {
-        ...envelope,
-        messages: nextMessages,
+        ...rewrittenEnvelope,
         metadata: nextMetadata,
       }
     : envelope;
