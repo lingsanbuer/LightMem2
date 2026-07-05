@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -136,6 +136,12 @@ test("Claude Code host e2e wires install, gateway reduction, report/visual, and 
 
     const reducedToolText = extractToolResultText(forwardedBlocks?.[1]);
     assertReductionMarkerText(reducedToolText);
+    const cacheAuditRaw = await readFile(join(stateDir, "cache-audit.jsonl"), "utf8");
+    const cacheAuditLines = cacheAuditRaw.trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(cacheAuditLines.length, 1);
+    assert.equal(typeof cacheAuditLines[0]?.stablePrefixFingerprint, "string");
+    assert.equal(cacheAuditLines[0]?.sessionId, "sess-e2e-1");
+    assert.equal(cacheAuditLines[0]?.cachedInputTokens, 0);
     await assertRecoveryRoundTrip({
       reducedText: reducedToolText,
       stateDir,

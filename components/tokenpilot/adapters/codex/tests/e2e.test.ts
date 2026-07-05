@@ -4,12 +4,14 @@ import { createServer as createHttpServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  assertColdWarmCacheUsage,
   assertProductSurfaceSmoke,
   assertRecoveryProtocolText,
   assertRecoveryRoundTrip,
   assertReductionMarkerText,
   createLongToolPayload,
   reserveUnusedPort,
+  startMockCachingJsonUpstream,
   startMockJsonUpstream,
   withTempHome,
 } from "@tokenpilot/host-adapter";
@@ -127,6 +129,10 @@ test("Codex host e2e wires install, proxy reduction, report/visual, and MCP reco
         model: "tokenpilot/gpt-5.4-mini",
         stream: false,
         instructions: "Your working directory is: /repo/demo\nRuntime: agent=agent-123 |\nBe precise.",
+        tools: [
+          { type: "function", function: { name: "z_tool", parameters: { z: 1, a: 2 } } },
+          { type: "function", function: { name: "a_tool", parameters: { b: true, a: false } } },
+        ],
         input: [
           {
             role: "developer",
@@ -150,9 +156,14 @@ test("Codex host e2e wires install, proxy reduction, report/visual, and MCP reco
     assert.equal(response.status, 200);
     assert.equal(upstream.requests.length, 1);
     assert.equal(upstream.requests[0]?.model, "gpt-5.4-mini");
-    assert.match(String(upstream.requests[0]?.instructions ?? ""), /Your working directory is: <WORKDIR>/);
-    assert.match(String(upstream.requests[0]?.instructions ?? ""), /Runtime: agent=<AGENT_ID> \|/);
+    assert.match(String(upstream.requests[0]?.instructions ?? ""), /Your working directory is: \/repo\/demo/);
+    assert.match(String(upstream.requests[0]?.instructions ?? ""), /Runtime: agent=agent-123 \|/);
     assertRecoveryProtocolText(String(upstream.requests[0]?.instructions ?? ""));
+    assert.equal(Array.isArray(upstream.requests[0]?.tools), true);
+    assert.equal((upstream.requests[0]?.tools as Array<any>)[0]?.function?.name, "a_tool");
+    assert.equal((upstream.requests[0]?.tools as Array<any>)[1]?.function?.name, "z_tool");
+    assert.deepEqual((upstream.requests[0]?.tools as Array<any>)[0]?.function?.parameters, { a: false, b: true });
+    assert.deepEqual((upstream.requests[0]?.tools as Array<any>)[1]?.function?.parameters, { a: 2, z: 1 });
 
     const forwardedInput = upstream.requests[0]?.input as Array<Record<string, unknown>>;
     assert.ok(Array.isArray(forwardedInput));
@@ -232,6 +243,16 @@ test("Codex host e2e wires install, proxy reduction, report/visual, and MCP reco
     assert.match(visual.stability[0]?.developerCanonical ?? "", /<WORKDIR>/);
     assert.match(visual.stability[0]?.dynamicContextText ?? "", /WORKDIR: \/repo\/demo/);
     assert.ok((visual.reduction[0]?.savedChars ?? 0) > 0);
+    const cacheAuditLines = (await readFile(join(stateDir, "cache-audit.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(cacheAuditLines.length > 0, true);
+    assert.equal(typeof cacheAuditLines[0]?.stablePrefixFingerprint, "string");
+    assert.equal(typeof cacheAuditLines[0]?.requestPromptCacheKey, "string");
+    assert.equal(Array.isArray(cacheAuditLines[0]?.entropyFindings), true);
+    assert.equal(Array.isArray(cacheAuditLines[0]?.driftReasons), true);
 
     await runtime?.close();
     await upstream.close();
@@ -382,6 +403,106 @@ test("Codex streaming requests persist response-session mapping before the next 
       }
     } finally {
       await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+});
+
+test("Codex cold and warm requests expose prompt cache hit usage when stable prefix stays fixed", async () => {
+  await withTempHome("lightmem2-codex-cache-warm-", async (homeDir) => {
+    const proxyPort = await reserveUnusedPort();
+    const stateDir = join(homeDir, ".codex", "tokenpilot-state", "tokenpilot");
+    const codexConfigPath = defaultCodexConfigPath();
+    const tokenPilotConfigPath = defaultTokenPilotConfigPath();
+
+    const upstream = await startMockCachingJsonUpstream();
+    await mkdir(join(homeDir, ".codex"), { recursive: true });
+    await writeTokenPilotCodexConfig(
+      normalizeTokenPilotCodexConfig({
+        proxyPort,
+        stateDir,
+        upstreamProvider: "OpenAI",
+        hooks: {
+          dynamicContextTarget: "user",
+        },
+        reduction: {
+          triggerMinChars: 999999,
+          maxToolChars: 999999,
+          passes: {
+            readStateCompaction: false,
+            toolPayloadTrim: false,
+            htmlSlimming: false,
+            execOutputTruncation: false,
+            agentsStartupOptimization: false,
+          },
+        },
+      }),
+      tokenPilotConfigPath,
+    );
+
+    const codexToml = [
+      "model_provider = \"tokenpilot\"",
+      "",
+      "[model_providers.tokenpilot]",
+      "name = \"TokenPilot\"",
+      `base_url = ${JSON.stringify(`http://127.0.0.1:${proxyPort}/v1`)}`,
+      "wire_api = \"responses\"",
+      "requires_openai_auth = true",
+      "",
+      "[model_providers.OpenAI]",
+      "name = \"OpenAI\"",
+      `base_url = ${JSON.stringify(upstream.baseUrl)}`,
+      "wire_api = \"responses\"",
+      "requires_openai_auth = true",
+      "",
+    ].join("\n");
+    await writeFile(codexConfigPath, codexToml, "utf8");
+
+    const config = await loadTokenPilotCodexConfig(tokenPilotConfigPath);
+    const runtime = await startCodexResponsesProxy({
+      config,
+      logger: createConsoleLogger(false),
+      codexConfigPath,
+    });
+
+    try {
+      const requestBody = {
+        model: "tokenpilot/gpt-5.4-mini",
+        stream: false,
+        instructions: "Your working directory is: /repo/demo\nRuntime: agent=agent-123 |\nBe precise.",
+        input: [
+          {
+            role: "developer",
+            content: "Your working directory is: /repo/demo\nRuntime: agent=agent-123 |\nBe precise.",
+          },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "say hi" }],
+          },
+        ],
+      };
+
+      const responseA = await fetch(`${runtime.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+      const responseB = await fetch(`${runtime.baseUrl}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+
+      assert.equal(responseA.status, 200);
+      assert.equal(responseB.status, 200);
+
+      const bodyA = await responseA.json() as Record<string, unknown>;
+      const bodyB = await responseB.json() as Record<string, unknown>;
+      assert.equal(typeof upstream.requests[0]?.prompt_cache_key, "string");
+      assert.equal(upstream.requests[0]?.prompt_cache_key, upstream.requests[1]?.prompt_cache_key);
+      assertColdWarmCacheUsage([bodyA.usage, bodyB.usage]);
+    } finally {
+      await runtime.close();
+      await upstream.close();
     }
   });
 });
