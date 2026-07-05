@@ -341,6 +341,48 @@ export function renderVisualPageHtml(): string {
       flex-wrap: wrap;
       margin-bottom: 16px;
     }
+    .selector-layout {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .selector-heading {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .segment-list {
+      display: grid;
+      gap: 8px;
+    }
+    .segment-btn {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.74);
+      color: inherit;
+      padding: 12px 14px;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+    }
+    .segment-btn:hover {
+      border-color: rgba(15, 118, 110, 0.22);
+      transform: translateY(-1px);
+    }
+    .segment-btn.active {
+      border-color: rgba(15, 118, 110, 0.28);
+      background: rgba(15, 118, 110, 0.08);
+    }
+    .segment-meta {
+      margin-top: 6px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--muted);
+      word-break: break-word;
+    }
     .chip {
       border: 1px solid var(--line);
       border-radius: 999px;
@@ -450,7 +492,8 @@ export function renderVisualPageScript(): string {
   sessionData: new Map(),
   lastSessionByHost: {},
   collapsed: false,
-  reductionSegmentsExpanded: false,
+  reductionSegmentIndex: 0,
+  reductionActiveCallKey: "",
   fingerprintGroupsExpanded: false,
 };
 
@@ -485,6 +528,11 @@ function fmtDate(iso) {
 
 function fmtInt(value) {
   return new Intl.NumberFormat("en-US").format(Number(value || 0));
+}
+
+function clampIndex(index, length) {
+  if (!Number.isFinite(index) || length <= 0) return 0;
+  return Math.max(0, Math.min(Math.trunc(index), length - 1));
 }
 
 function savingsSummary(item) {
@@ -672,6 +720,22 @@ function renderCacheAuditFingerprintGroups(groups) {
     + '</div>';
 }
 
+function buildReductionCallKey(item) {
+  if (!item) return "";
+  return String(item.requestId || "") + "::" + String(item.at || "");
+}
+
+function syncReductionSegmentSelection(item) {
+  const segments = Array.isArray(item && item.segments) ? item.segments : [];
+  const callKey = buildReductionCallKey(item);
+  if (state.reductionActiveCallKey !== callKey) {
+    state.reductionActiveCallKey = callKey;
+    state.reductionSegmentIndex = 0;
+  }
+  state.reductionSegmentIndex = clampIndex(state.reductionSegmentIndex, segments.length);
+  return segments[state.reductionSegmentIndex] || null;
+}
+
 async function fetchJson(path) {
   const response = await fetch(path);
   if (!response.ok) throw new Error("HTTP " + response.status);
@@ -766,6 +830,9 @@ function renderHostOverview() {
 async function loadSession(sessionId) {
   if (!sessionId) return;
   state.activeSessionId = sessionId;
+  state.reductionSegmentIndex = 0;
+  state.reductionActiveCallKey = "";
+  state.fingerprintGroupsExpanded = false;
   if (state.activeHost) {
     state.lastSessionByHost[state.activeHost] = sessionId;
   }
@@ -844,6 +911,9 @@ async function setActiveHost(hostId) {
   state.activeHost = hostId || "";
   state.activeSessionId = "";
   state.sessions = [];
+  state.reductionSegmentIndex = 0;
+  state.reductionActiveCallKey = "";
+  state.fingerprintGroupsExpanded = false;
   const query = new URL(window.location.href);
   if (state.activeHost) {
     query.searchParams.set("host", state.activeHost);
@@ -911,14 +981,20 @@ function renderReduction(item) {
   const recentCacheAudit = data.recentCacheAudit || [];
   const recentCacheAuditGroups = data.recentCacheAuditGroups || [];
   const segments = Array.isArray(item.segments) ? item.segments : [];
-  const visibleSegments = state.reductionSegmentsExpanded ? segments : segments.slice(0, 1);
-  const primarySegment = segments[0] || null;
-  const passes = primarySegment && Array.isArray(primarySegment.report) ? primarySegment.report : [];
+  const selectedSegment = syncReductionSegmentSelection(item);
+  const selectedSegmentNumber = selectedSegment ? state.reductionSegmentIndex + 1 : 0;
+  const passes = selectedSegment && Array.isArray(selectedSegment.report) ? selectedSegment.report : [];
   const changedPasses = passes.filter((entry) => entry && entry.changed);
   const toolSummary = Array.isArray(item.toolNames) && item.toolNames.length > 0 ? item.toolNames.join(", ") : "-";
   const routeSummary = Array.isArray(item.routes) && item.routes.length > 0 ? item.routes.join(", ") : "-";
   const pathSummary = Array.isArray(item.dataPaths) && item.dataPaths.length > 0 ? item.dataPaths.join(", ") : "-";
-  el.panelTitle.textContent = "Reduction";
+  const latestSegmentSummary = selectedSegment
+    ? "latest segment #" + fmtInt(selectedSegmentNumber)
+      + " · " + (selectedSegment.toolName || "-")
+      + " · " + (selectedSegment.route || "-")
+      + " · saved " + fmtInt(selectedSegment.savedChars)
+    : "-";
+  el.panelTitle.textContent = "Reduction Call";
   el.panelMeta.innerHTML = '<span>' + escapeHtml(fmtDate(item.at)) + '</span>'
     + '<span>request ' + escapeHtml(item.requestId) + '</span>'
     + '<span>segments ' + escapeHtml(fmtInt(item.segmentCount || 0)) + '</span>'
@@ -926,10 +1002,12 @@ function renderReduction(item) {
   el.stats.innerHTML = [
     ["Saved chars", fmtInt(item.totalSavedChars)],
     ["Segments", fmtInt(item.segmentCount)],
+    ["Selected segment", selectedSegment ? fmtInt(selectedSegmentNumber) + " / " + fmtInt(segments.length) : "-"],
     ["Passes touched", fmtInt(changedPasses.length)],
     ["Tools", toolSummary],
     ["Routes", routeSummary],
     ["Paths", pathSummary],
+    ["Latest segment", latestSegmentSummary],
     ...(uxAggregate && uxAggregate.latestCountMode
       ? [["Count mode", countModeMetaLabel(uxAggregate.latestCountMode)]]
       : []),
@@ -943,22 +1021,24 @@ function renderReduction(item) {
       ? [["Dominant pass", recentReduction.dominantPass.key]]
       : []),
   ].map(([label, value]) => '<div class="chip">' + escapeHtml(label) + ': ' + escapeHtml(value) + '</div>').join("");
-  el.compareRoot.innerHTML = primarySegment
+  el.compareRoot.innerHTML = selectedSegment
     ? '<div class="compare">'
-      + '<div class="pane"><div class="pane-label">Before First Segment</div><pre>' + escapeHtml(primarySegment.beforeText) + '</pre></div>'
-      + '<div class="pane"><div class="pane-label">After First Segment</div><pre>' + escapeHtml(primarySegment.afterText) + '</pre></div>'
+      + '<div class="pane"><div class="pane-label">Before Selected Segment</div><pre>' + escapeHtml(selectedSegment.beforeText) + '</pre></div>'
+      + '<div class="pane"><div class="pane-label">After Selected Segment</div><pre>' + escapeHtml(selectedSegment.afterText) + '</pre></div>'
       + '</div>'
     : '<div class="empty">No reduction segments in this call.</div>';
   const segmentsHtml = segments.length === 0
     ? ""
-    : '<div class="pass-list">'
-      + visibleSegments.map((segment, index) => {
-        const absoluteIndex = state.reductionSegmentsExpanded ? index : index;
-        const segmentNumber = state.reductionSegmentsExpanded ? index + 1 : 1;
+    : '<div class="selector-layout">'
+      + '<div><div class="selector-heading">Segments In This Call</div><div class="segment-list">'
+      + segments.map((segment, index) => {
         const segmentPasses = Array.isArray(segment.report) ? segment.report.filter((entry) => entry && entry.changed) : [];
-        return '<div class="pass-item">'
-          + '<strong>Segment #' + escapeHtml(String(segmentNumber)) + '</strong>'
-          + ' · saved=' + escapeHtml(fmtInt(segment.savedChars))
+        const active = index === state.reductionSegmentIndex ? " active" : "";
+        return '<button class="segment-btn' + active + '" data-segment-index="' + escapeHtml(String(index)) + '" type="button">'
+          + '<strong>Segment #' + escapeHtml(String(index + 1)) + '</strong>'
+          + (index === state.reductionSegmentIndex ? ' · selected' : '')
+          + '<div class="segment-meta">'
+          + 'saved=' + escapeHtml(fmtInt(segment.savedChars))
           + ' · field=' + escapeHtml(segment.field || "-")
           + ' · tool=' + escapeHtml(segment.toolName || "-")
           + '<br />segmentId=' + escapeHtml(segment.segmentId || "-")
@@ -966,16 +1046,22 @@ function renderReduction(item) {
           + (segment.dataPath ? ' · path=' + escapeHtml(segment.dataPath) : '')
           + (segment.route ? '<br />route=' + escapeHtml(segment.route) + (segment.routeReason ? ' · reason=' + escapeHtml(segment.routeReason) : '') : '')
           + '<br />changed passes=' + escapeHtml(fmtInt(segmentPasses.length))
-          + '</div>';
+          + '</div></button>';
       }).join("")
-      + (segments.length > 1
-        ? '<button id="toggleReductionSegmentsBtn" class="nav-btn" type="button" style="margin-top:8px;">'
-          + escapeHtml(state.reductionSegmentsExpanded
-            ? 'Show fewer segments'
-            : 'Show all ' + fmtInt(segments.length) + ' segments')
-          + '</button>'
-        : '')
+      + '</div></div>'
       + '</div>';
+  const selectedSegmentDetails = !selectedSegment
+    ? ""
+    : '<div class="pass-list"><div class="pass-item"><strong>Selected Segment</strong>'
+      + '<br />saved=' + escapeHtml(fmtInt(selectedSegment.savedChars))
+      + ' · route=' + escapeHtml(selectedSegment.route || "-")
+      + (selectedSegment.routeReason ? ' · reason=' + escapeHtml(selectedSegment.routeReason) : '')
+      + '<br />field=' + escapeHtml(selectedSegment.field || "-")
+      + ' · tool=' + escapeHtml(selectedSegment.toolName || "-")
+      + (selectedSegment.dataPath ? ' · path=' + escapeHtml(selectedSegment.dataPath) : '')
+      + '<br />segmentId=' + escapeHtml(selectedSegment.segmentId || "-")
+      + ' · itemIndex=' + escapeHtml(fmtInt(selectedSegment.itemIndex))
+      + '</div></div>';
   const passesHtml = passes.length === 0
     ? ""
     : '<div class="pass-list">' + passes.map((entry) => {
@@ -992,17 +1078,17 @@ function renderReduction(item) {
       }).join("") + '</div>';
   el.passRoot.innerHTML =
     segmentsHtml
+    + selectedSegmentDetails
     + passesHtml
     + renderCacheAuditPanel(cacheAuditSummary)
     + renderCacheAuditFingerprintGroups(recentCacheAuditGroups)
     + renderCacheAuditRecentTable(recentCacheAudit);
-  const toggleSegmentsBtn = document.getElementById("toggleReductionSegmentsBtn");
-  if (toggleSegmentsBtn) {
-    toggleSegmentsBtn.addEventListener("click", () => {
-      state.reductionSegmentsExpanded = !state.reductionSegmentsExpanded;
+  el.passRoot.querySelectorAll("[data-segment-index]").forEach((node) => {
+    node.addEventListener("click", () => {
+      state.reductionSegmentIndex = Number(node.getAttribute("data-segment-index") || "0");
       renderActiveView();
     });
-  }
+  });
   const toggleFingerprintGroupsBtn = document.getElementById("toggleFingerprintGroupsBtn");
   if (toggleFingerprintGroupsBtn) {
     toggleFingerprintGroupsBtn.addEventListener("click", () => {
@@ -1073,16 +1159,13 @@ function renderActiveView() {
   }
   const safeIndex = Math.max(0, Math.min(index, items.length - 1));
   state.indexes[state.activeTab] = safeIndex;
-  el.pagerLabel.textContent = (safeIndex + 1) + " / " + items.length;
+  el.pagerLabel.textContent = (state.activeTab === "reduction" ? "Call " : "") + (safeIndex + 1) + " / " + items.length;
   el.prevBtn.disabled = safeIndex <= 0;
   el.nextBtn.disabled = safeIndex >= items.length - 1;
   const item = items[safeIndex];
   if (state.activeTab !== "reduction") {
-    state.reductionSegmentsExpanded = false;
-  }
-  if (state.activeTab === "reduction") {
-    // Keep current toggle state while paging within reduction calls.
-  } else {
+    state.reductionSegmentIndex = 0;
+    state.reductionActiveCallKey = "";
     state.fingerprintGroupsExpanded = false;
   }
   if (state.activeTab === "stability") {
@@ -1096,17 +1179,22 @@ function renderActiveView() {
 
 el.tabStability.addEventListener("click", () => {
   state.activeTab = "stability";
+  state.reductionSegmentIndex = 0;
+  state.reductionActiveCallKey = "";
   state.fingerprintGroupsExpanded = false;
   renderActiveView();
 });
 el.tabReduction.addEventListener("click", () => {
   state.activeTab = "reduction";
-  state.reductionSegmentsExpanded = false;
+  state.reductionSegmentIndex = 0;
+  state.reductionActiveCallKey = "";
   state.fingerprintGroupsExpanded = false;
   renderActiveView();
 });
 el.tabEviction.addEventListener("click", () => {
   state.activeTab = "eviction";
+  state.reductionSegmentIndex = 0;
+  state.reductionActiveCallKey = "";
   state.fingerprintGroupsExpanded = false;
   renderActiveView();
 });
@@ -1134,6 +1222,9 @@ window.addEventListener("popstate", () => {
   state.activeHost = query.searchParams.get("host") || "";
   state.activeSessionId = query.searchParams.get("session") || "";
   state.activeTab = query.searchParams.get("tab") || "stability";
+  state.reductionSegmentIndex = 0;
+  state.reductionActiveCallKey = "";
+  state.fingerprintGroupsExpanded = false;
   void loadSessions().catch((error) => {
     renderEmpty("Failed to load visual data: " + (error && error.message ? error.message : String(error)));
   });
