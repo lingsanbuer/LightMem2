@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const CLAUDE_TOOL_SEARCH_ENV = "ENABLE_TOOL_SEARCH";
 export const CLAUDE_TOOL_SEARCH_DEFAULT = "true";
@@ -35,6 +35,10 @@ export type TokenPilotClaudeCodeConfig = {
     };
     passOptions: Record<string, Record<string, unknown>>;
   };
+};
+
+type NormalizeClaudeCodeConfigOptions = {
+  configPath?: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -82,19 +86,25 @@ export function expandHomePath(value: string): string {
 }
 
 export function defaultClaudeCodeSettingsPath(): string {
-  return join(homedir(), ".claude", "settings.json");
+  return process.env.CLAUDE_CODE_SETTINGS_PATH
+    ? resolve(process.env.CLAUDE_CODE_SETTINGS_PATH)
+    : join(homedir(), ".claude", "settings.json");
 }
 
 export function defaultClaudeCodeMcpConfigPath(): string {
-  return join(homedir(), ".claude", ".claude.json");
+  return process.env.CLAUDE_CODE_MCP_CONFIG_PATH
+    ? resolve(process.env.CLAUDE_CODE_MCP_CONFIG_PATH)
+    : join(homedir(), ".claude", ".claude.json");
 }
 
 export function defaultTokenPilotClaudeCodeConfigPath(): string {
-  return join(homedir(), ".claude", "tokenpilot.json");
+  return process.env.TOKENPILOT_CLAUDE_CODE_CONFIG
+    ? resolve(process.env.TOKENPILOT_CLAUDE_CODE_CONFIG)
+    : join(homedir(), ".claude", "tokenpilot.json");
 }
 
-export function defaultClaudeCodeStateDir(): string {
-  return join(homedir(), ".claude", "tokenpilot-state", "tokenpilot");
+export function defaultClaudeCodeStateDir(configPath = defaultTokenPilotClaudeCodeConfigPath()): string {
+  return join(dirname(configPath), "tokenpilot-state", "tokenpilot");
 }
 
 export function defaultClaudeUpstreamBaseUrl(): string {
@@ -105,16 +115,20 @@ export function proxyBaseUrlForPort(port: number): string {
   return `http://127.0.0.1:${port}`;
 }
 
-export function normalizeTokenPilotClaudeCodeConfig(raw: unknown): TokenPilotClaudeCodeConfig {
+export function normalizeTokenPilotClaudeCodeConfig(
+  raw: unknown,
+  options?: NormalizeClaudeCodeConfigOptions,
+): TokenPilotClaudeCodeConfig {
   const obj = asRecord(raw);
   const hooks = asRecord(obj.hooks);
   const modules = asRecord(obj.modules);
   const reduction = asRecord(obj.reduction);
   const passes = asRecord(reduction.passes);
+  const configPath = options?.configPath ?? defaultTokenPilotClaudeCodeConfigPath();
   return {
     enabled: boolValue(obj.enabled, true),
     logLevel: obj.logLevel === "debug" ? "debug" : "info",
-    stateDir: expandHomePath(stringValue(obj.stateDir) ?? defaultClaudeCodeStateDir()),
+    stateDir: expandHomePath(stringValue(obj.stateDir) ?? defaultClaudeCodeStateDir(configPath)),
     proxyPort: numberValue(obj.proxyPort, 17668, 1025, 65535),
     proxyBaseUrl: stringValue(obj.proxyBaseUrl),
     proxyApiKey: stringValue(obj.proxyApiKey),
@@ -147,10 +161,10 @@ export async function loadTokenPilotClaudeCodeConfig(
   configPath = defaultTokenPilotClaudeCodeConfigPath(),
 ): Promise<TokenPilotClaudeCodeConfig> {
   if (!existsSync(configPath)) {
-    return normalizeTokenPilotClaudeCodeConfig({});
+    return normalizeTokenPilotClaudeCodeConfig({}, { configPath });
   }
   const text = await readFile(configPath, "utf8");
-  return normalizeTokenPilotClaudeCodeConfig(JSON.parse(text));
+  return normalizeTokenPilotClaudeCodeConfig(JSON.parse(text), { configPath });
 }
 
 export async function writeTokenPilotClaudeCodeConfig(

@@ -445,3 +445,40 @@ test("formatCodexDoctorReport shows degraded mode when core runtime is healthy b
   assert.match(text, /stable-prefix rewriting and reduction remain available/);
   assert.match(text, /startup_timeout_sec/);
 });
+
+test("formatCodexDoctorReport explains first-run SessionStart remediation when the proxy is unhealthy", () => {
+  const text = formatCodexDoctorReport({
+    configPath: "/tmp/config.toml",
+    hooksConfigPath: "/tmp/hooks.json",
+    tokenPilotConfigPath: "/tmp/tokenpilot.json",
+    proxyBaseUrl: "http://127.0.0.1:17680/v1",
+    expectedHookCommand: "node hooks-handler.js",
+    expectedMcpCommand: process.execPath,
+    expectedMcpArgs: ["/tmp/server.js"],
+    expectedMcpStartupTimeoutSec: 90,
+    providerInstalled: true,
+    providerActive: true,
+    providerIntercepted: true,
+    hooksInstalled: true,
+    hooksComplete: true,
+    hooksMatchExpectedCommand: true,
+    installedHookEvents: ["SessionStart", "PreToolUse", "PostToolUse", "Stop"],
+    missingHookEvents: [],
+    mcpInstalled: true,
+    mcpStateDirMatches: true,
+    mcpCommandMatches: true,
+    mcpArgsMatch: true,
+    mcpStartupTimeoutSecMatches: true,
+    daemonRunning: false,
+    proxyHealthy: false,
+    upstreamProvider: "OPENAI",
+    upstreamBaseUrl: "https://api.openai.com/v1",
+    upstreamLoopDetected: false,
+    coreRuntimeHealthy: false,
+    recoveryMcpHealthy: true,
+    degradedMode: false,
+  });
+  assert.match(text, /trust the TokenPilot hooks in Codex/);
+  assert.match(text, /start a new session so SessionStart can boot the local proxy/);
+  assert.match(text, /tokenpilot-codex start/);
+});

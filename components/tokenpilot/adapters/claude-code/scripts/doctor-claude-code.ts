@@ -7,12 +7,12 @@ import {
 import { formatClaudeCodeDoctorReport, inspectClaudeCodeDoctor } from "../src/doctor.js";
 
 async function main() {
-  const configPath = defaultTokenPilotClaudeCodeConfigPath();
+  const configPath = process.env.TOKENPILOT_CLAUDE_CODE_CONFIG ?? defaultTokenPilotClaudeCodeConfigPath();
   const config = await loadTokenPilotClaudeCodeConfig(configPath);
   const report = await inspectClaudeCodeDoctor({
     config,
-    mcpConfigPath: defaultClaudeCodeMcpConfigPath(),
-    settingsPath: defaultClaudeCodeSettingsPath(),
+    mcpConfigPath: process.env.CLAUDE_CODE_MCP_CONFIG_PATH ?? defaultClaudeCodeMcpConfigPath(),
+    settingsPath: process.env.CLAUDE_CODE_SETTINGS_PATH ?? defaultClaudeCodeSettingsPath(),
     tokenPilotConfigPath: configPath,
   });
   console.log(formatClaudeCodeDoctorReport(report));

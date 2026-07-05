@@ -21,6 +21,8 @@ installCodexTokenPilot({
   console.log(`Recovery MCP probe detail: ${result.mcpProbe.detail}`);
   console.log(`Proxy base URL: ${result.baseUrl}`);
   console.log("TokenPilot will auto-start from Codex SessionStart hooks after hooks are trusted.");
+  console.log("Next step: trust the TokenPilot hooks if Codex asks for hook review.");
+  console.log("Next step: start a new Codex session so SessionStart can boot the local proxy.");
   console.log(`Codex default provider remains '${result.providerName}', and TokenPilot forwards upstream to '${result.activeProviderName}'.`);
   console.log("For manual troubleshooting, run: tokenpilot-codex start");
   console.log("If Codex reports hooks need review, run /hooks and trust the TokenPilot hooks.");

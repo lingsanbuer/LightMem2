@@ -98,6 +98,33 @@ test("installClaudeCodeTokenPilot reports degraded MCP mode when probe is skippe
   }
 });
 
+test("installClaudeCodeTokenPilot honors custom environment-configured paths", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-install-env-paths-"));
+  const originalSettingsPath = process.env.CLAUDE_CODE_SETTINGS_PATH;
+  const originalMcpConfigPath = process.env.CLAUDE_CODE_MCP_CONFIG_PATH;
+  const originalTokenPilotConfigPath = process.env.TOKENPILOT_CLAUDE_CODE_CONFIG;
+  process.env.CLAUDE_CODE_SETTINGS_PATH = join(dir, "isolated", "settings.json");
+  process.env.CLAUDE_CODE_MCP_CONFIG_PATH = join(dir, "isolated", ".claude.json");
+  process.env.TOKENPILOT_CLAUDE_CODE_CONFIG = join(dir, "isolated", "tokenpilot.json");
+  try {
+    const result = await installClaudeCodeTokenPilot({
+      probeMcp: false,
+    });
+    assert.equal(result.settingsPath, process.env.CLAUDE_CODE_SETTINGS_PATH);
+    assert.equal(result.mcpConfigPath, process.env.CLAUDE_CODE_MCP_CONFIG_PATH);
+    assert.equal(result.tokenPilotConfigPath, process.env.TOKENPILOT_CLAUDE_CODE_CONFIG);
+    assert.equal(result.stateDir, join(dir, "isolated", "tokenpilot-state", "tokenpilot"));
+  } finally {
+    if (originalSettingsPath === undefined) delete process.env.CLAUDE_CODE_SETTINGS_PATH;
+    else process.env.CLAUDE_CODE_SETTINGS_PATH = originalSettingsPath;
+    if (originalMcpConfigPath === undefined) delete process.env.CLAUDE_CODE_MCP_CONFIG_PATH;
+    else process.env.CLAUDE_CODE_MCP_CONFIG_PATH = originalMcpConfigPath;
+    if (originalTokenPilotConfigPath === undefined) delete process.env.TOKENPILOT_CLAUDE_CODE_CONFIG;
+    else process.env.TOKENPILOT_CLAUDE_CODE_CONFIG = originalTokenPilotConfigPath;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("resolveClaudeCodeHookCommandForInstall finds the adapter root from the bundled CLI tree", async () => {
   const repoRoot = resolve(__dirname, "..", "..", "..", "..", "..");
   const bundledCliModuleDir = join(repoRoot, "components", "tokenpilot", "products", "cli", "dist");

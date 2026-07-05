@@ -79,6 +79,53 @@ test("claude-code cli bridge exposes only the supported Claude Code command surf
   }
 });
 
+test("claude-code cli bridge follows custom config env paths instead of the default home paths", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-bridge-custom-paths-"));
+  const originalHome = process.env.HOME;
+  const originalSettingsPath = process.env.CLAUDE_CODE_SETTINGS_PATH;
+  const originalMcpConfigPath = process.env.CLAUDE_CODE_MCP_CONFIG_PATH;
+  const originalTokenPilotConfigPath = process.env.TOKENPILOT_CLAUDE_CODE_CONFIG;
+  process.env.HOME = join(dir, "real-home");
+  process.env.CLAUDE_CODE_SETTINGS_PATH = join(dir, "isolated", "settings.json");
+  process.env.CLAUDE_CODE_MCP_CONFIG_PATH = join(dir, "isolated", ".claude.json");
+  process.env.TOKENPILOT_CLAUDE_CODE_CONFIG = join(dir, "isolated", "tokenpilot.json");
+  try {
+    await mkdir(join(dir, "isolated"), { recursive: true });
+    await writeFile(
+      process.env.CLAUDE_CODE_SETTINGS_PATH!,
+      JSON.stringify({ env: {}, hooks: {} }, null, 2),
+      "utf8",
+    );
+    await writeFile(
+      process.env.CLAUDE_CODE_MCP_CONFIG_PATH!,
+      JSON.stringify({ mcpServers: {} }, null, 2),
+      "utf8",
+    );
+
+    const bridge = createClaudeCodeCliBridge({ host: "claude-code" });
+    const status = await bridge.handleCommand({ args: "status" });
+    assert.match(status.text, /proxyPort: 17668/);
+
+    const doctor = await bridge.handleCommand({ args: "doctor" });
+    assert.match(doctor.text, new RegExp(process.env.TOKENPILOT_CLAUDE_CODE_CONFIG!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(doctor.text, new RegExp(process.env.CLAUDE_CODE_SETTINGS_PATH!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(doctor.text, new RegExp(process.env.CLAUDE_CODE_MCP_CONFIG_PATH!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+    const reloaded = await loadTokenPilotClaudeCodeConfig(process.env.TOKENPILOT_CLAUDE_CODE_CONFIG!);
+    assert.equal(reloaded.stateDir, join(dir, "isolated", "tokenpilot-state", "tokenpilot"));
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalSettingsPath === undefined) delete process.env.CLAUDE_CODE_SETTINGS_PATH;
+    else process.env.CLAUDE_CODE_SETTINGS_PATH = originalSettingsPath;
+    if (originalMcpConfigPath === undefined) delete process.env.CLAUDE_CODE_MCP_CONFIG_PATH;
+    else process.env.CLAUDE_CODE_MCP_CONFIG_PATH = originalMcpConfigPath;
+    if (originalTokenPilotConfigPath === undefined) delete process.env.TOKENPILOT_CLAUDE_CODE_CONFIG;
+    else process.env.TOKENPILOT_CLAUDE_CODE_CONFIG = originalTokenPilotConfigPath;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("claude-code cli bridge visual opens the shared browser visual pinned to the Claude session", async () => {
   const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-bridge-visual-"));
   const originalHome = process.env.HOME;

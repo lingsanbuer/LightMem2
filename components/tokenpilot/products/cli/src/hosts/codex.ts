@@ -17,6 +17,7 @@ import {
   defaultTokenPilotConfigPath,
   loadTokenPilotCodexConfig,
   normalizeTokenPilotCodexConfig,
+  resolvedCodexConfigPath,
   writeTokenPilotCodexConfig,
 } from "../../../../adapters/codex/src/config.js";
 import { inspectCodexDoctor, formatCodexDoctorReport } from "../../../../adapters/codex/src/doctor.js";
@@ -119,7 +120,7 @@ export function createCodexCliBridge(target: {
       const config = currentConfig as any;
       const report = await inspectCodexDoctor({
         config,
-        configPath: defaultCodexConfigPath(),
+        configPath: resolvedCodexConfigPath(),
         tokenPilotConfigPath: defaultTokenPilotConfigPath(),
         hooksConfigPath: defaultHooksConfigPath(),
       });

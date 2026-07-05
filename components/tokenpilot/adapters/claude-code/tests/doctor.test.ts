@@ -339,3 +339,40 @@ test("formatClaudeCodeDoctorReport shows degraded mode when core runtime is heal
   assert.match(text, /gateway routing and reduction remain available/);
   assert.match(text, /startup_timeout_sec/);
 });
+
+test("formatClaudeCodeDoctorReport explains first-run SessionStart remediation when the gateway is unhealthy", () => {
+  const text = formatClaudeCodeDoctorReport({
+    settingsPath: "/tmp/settings.json",
+    tokenPilotConfigPath: "/tmp/tokenpilot.json",
+    stateDir: "/tmp/state",
+    proxyBaseUrl: "http://127.0.0.1:17668",
+    mcpConfigPath: "/tmp/.claude.json",
+    expectedHookCommand: "node hooks-handler.js",
+    expectedMcpCommand: process.execPath,
+    expectedMcpArgs: ["/tmp/server.js"],
+    expectedMcpStartupTimeoutSec: 90,
+    settingsInstalled: true,
+    hooksInstalled: true,
+    hooksComplete: true,
+    hooksMatchExpectedCommand: true,
+    installedHookEvents: ["SessionStart", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"],
+    missingHookEvents: [],
+    routedViaGateway: true,
+    toolSearchEnabled: true,
+    proxyHealthy: false,
+    upstreamBaseUrl: "https://api.anthropic.com/v1/messages",
+    mcpInstalled: true,
+    mcpStateDirMatches: true,
+    mcpCommandMatches: true,
+    mcpArgsMatch: true,
+    mcpStartupTimeoutSecMatches: true,
+    stateDirExists: true,
+    sessionStateAvailable: false,
+    uxEffectsAvailable: false,
+    coreRuntimeHealthy: false,
+    recoveryMcpHealthy: true,
+    degradedMode: false,
+  });
+  assert.match(text, /start a new Claude Code session so SessionStart can boot the local TokenPilot gateway/);
+  assert.match(text, /tokenpilot-claude-code start/);
+});

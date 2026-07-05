@@ -11,6 +11,13 @@ test("normalizeTokenPilotClaudeCodeConfig applies stable defaults", () => {
   assert.match(config.stateDir, /\.claude\/tokenpilot-state\/tokenpilot$/);
 });
 
+test("normalizeTokenPilotClaudeCodeConfig derives default stateDir from the tokenpilot config path", () => {
+  const config = normalizeTokenPilotClaudeCodeConfig({}, {
+    configPath: "/tmp/custom-claude-root/tokenpilot.json",
+  });
+  assert.equal(config.stateDir, "/tmp/custom-claude-root/tokenpilot-state/tokenpilot");
+});
+
 test("normalizeTokenPilotClaudeCodeConfig trims and clamps values", () => {
   const config = normalizeTokenPilotClaudeCodeConfig({
     logLevel: "debug",

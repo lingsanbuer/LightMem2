@@ -1,7 +1,11 @@
 import { installClaudeCodeTokenPilot } from "../src/install.js";
 
 async function main() {
-  const result = await installClaudeCodeTokenPilot();
+  const result = await installClaudeCodeTokenPilot({
+    settingsPath: process.env.CLAUDE_CODE_SETTINGS_PATH,
+    mcpConfigPath: process.env.CLAUDE_CODE_MCP_CONFIG_PATH,
+    tokenPilotConfigPath: process.env.TOKENPILOT_CLAUDE_CODE_CONFIG,
+  });
   console.log([
     "TokenPilot Claude Code install complete:",
     `- settings: ${result.settingsPath}`,
@@ -24,6 +28,9 @@ async function main() {
     `- recovery MCP server: ${result.mcpServerName}`,
     `- recovery MCP probe: ${result.mcpProbe.ok ? "ok" : "degraded"}`,
     `- recovery MCP probe detail: ${result.mcpProbe.detail}`,
+    "- next step: trust the installed TokenPilot hooks if Claude Code asks for hook review",
+    "- next step: start a new Claude Code session so SessionStart can boot the local gateway",
+    "- manual fallback: run `tokenpilot-claude-code start` if the first doctor still shows proxy unhealthy",
   ].join("\n"));
   if (result.mcpProbe.degraded) {
     console.log("MCP recovery is currently degraded. Claude Code gateway routing and reduction remain usable, but `memory_fault_recover` may be unavailable until MCP startup succeeds.");

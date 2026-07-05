@@ -135,7 +135,8 @@ export function formatCodexDoctorReport(report: CodexDoctorReport): string {
     fixes.push("- rerun the Codex install command or set `startup_timeout_sec` on `tokenpilot_memory_fault_recover` to the expected value");
   }
   if (!report.daemonRunning || !report.proxyHealthy) {
-    fixes.push("- start or restart the TokenPilot Codex daemon before using Codex");
+    fixes.push("- trust the TokenPilot hooks in Codex, then start a new session so SessionStart can boot the local proxy");
+    fixes.push("- if the proxy is still unhealthy after a new session starts, run `tokenpilot-codex start` or `tokenpilot-codex restart`");
   }
   if (report.degradedMode) {
     lines.push(

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export type CodexProviderConfig = {
   name?: string;
@@ -45,6 +45,10 @@ export type TokenPilotCodexConfig = {
   };
 };
 
+type NormalizeCodexConfigOptions = {
+  configPath?: string;
+};
+
 export function expandHomePath(value: string): string {
   if (value === "~") return homedir();
   if (value.startsWith("~/")) return join(homedir(), value.slice(2));
@@ -56,15 +60,25 @@ export function defaultCodexConfigPath(): string {
 }
 
 export function defaultTokenPilotConfigPath(): string {
-  return join(homedir(), ".codex", "tokenpilot.json");
+  return process.env.TOKENPILOT_CODEX_CONFIG
+    ? resolve(process.env.TOKENPILOT_CODEX_CONFIG)
+    : join(homedir(), ".codex", "tokenpilot.json");
 }
 
-export function defaultStateDir(): string {
-  return join(homedir(), ".codex", "tokenpilot-state", "tokenpilot");
+export function defaultStateDir(configPath = defaultTokenPilotConfigPath()): string {
+  return join(dirname(configPath), "tokenpilot-state", "tokenpilot");
 }
 
 export function defaultHooksConfigPath(): string {
-  return join(homedir(), ".codex", "hooks.json");
+  return process.env.CODEX_HOOKS_CONFIG_PATH
+    ? resolve(process.env.CODEX_HOOKS_CONFIG_PATH)
+    : join(homedir(), ".codex", "hooks.json");
+}
+
+export function resolvedCodexConfigPath(): string {
+  return process.env.CODEX_CONFIG_PATH
+    ? resolve(process.env.CODEX_CONFIG_PATH)
+    : defaultCodexConfigPath();
 }
 
 export type CodexMcpServerConfig = {
@@ -112,7 +126,10 @@ function sanitizeCodexReductionPassOptions(raw: unknown): Record<string, Record<
   return output;
 }
 
-export function normalizeTokenPilotCodexConfig(raw: unknown): TokenPilotCodexConfig {
+export function normalizeTokenPilotCodexConfig(
+  raw: unknown,
+  options?: NormalizeCodexConfigOptions,
+): TokenPilotCodexConfig {
   const obj = asRecord(raw);
   const proxyMode = asRecord(obj.proxyMode);
   const hooks = asRecord(obj.hooks);
@@ -121,11 +138,12 @@ export function normalizeTokenPilotCodexConfig(raw: unknown): TokenPilotCodexCon
   const passes = asRecord(reduction.passes);
   const upstream = asRecord(obj.upstream);
   const upstreamBaseUrl = stringValue(upstream.baseUrl);
+  const configPath = options?.configPath ?? defaultTokenPilotConfigPath();
 
   return {
     enabled: boolValue(obj.enabled, true),
     logLevel: obj.logLevel === "debug" ? "debug" : "info",
-    stateDir: expandHomePath(stringValue(obj.stateDir) ?? defaultStateDir()),
+    stateDir: expandHomePath(stringValue(obj.stateDir) ?? defaultStateDir(configPath)),
     proxyPort: numberValue(obj.proxyPort, 17667, 1025, 65535),
     providerName: stringValue(obj.providerName) ?? "tokenpilot",
     proxyBaseUrl: stringValue(obj.proxyBaseUrl),
@@ -167,10 +185,10 @@ export function normalizeTokenPilotCodexConfig(raw: unknown): TokenPilotCodexCon
 
 export async function loadTokenPilotCodexConfig(configPath = defaultTokenPilotConfigPath()): Promise<TokenPilotCodexConfig> {
   if (!existsSync(configPath)) {
-    return normalizeTokenPilotCodexConfig({});
+    return normalizeTokenPilotCodexConfig({}, { configPath });
   }
   const text = await readFile(configPath, "utf8");
-  return normalizeTokenPilotCodexConfig(JSON.parse(text));
+  return normalizeTokenPilotCodexConfig(JSON.parse(text), { configPath });
 }
 
 export async function writeTokenPilotCodexConfig(
@@ -302,7 +320,7 @@ export async function readCodexMcpServerFromToml(
 
 export async function resolveUpstreamProvider(
   config: TokenPilotCodexConfig,
-  codexConfigPath = defaultCodexConfigPath(),
+  codexConfigPath = resolvedCodexConfigPath(),
 ): Promise<CodexProviderConfig> {
   if (config.proxyBaseUrl) {
     return {

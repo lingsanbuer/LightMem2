@@ -91,7 +91,8 @@ function remediationLines(report: ClaudeCodeDoctorReport): string[] {
     fixes.push("- rerun the Claude Code install command or set the recovery MCP `startup_timeout_sec` to the expected value");
   }
   if (report.settingsInstalled && fixes.length === 0 && !report.proxyHealthy) {
-    fixes.push("- start the local TokenPilot Claude Code gateway before using Claude Code");
+    fixes.push("- start a new Claude Code session so SessionStart can boot the local TokenPilot gateway");
+    fixes.push("- if the gateway is still unhealthy after a new session starts, run `tokenpilot-claude-code start` or `tokenpilot-claude-code restart`");
   }
   return fixes;
 }
