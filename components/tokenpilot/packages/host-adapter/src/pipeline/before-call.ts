@@ -8,6 +8,9 @@ import {
 import {
   prepareStablePrefixEnvelope,
 } from "./stable-prefix.js";
+import {
+  canonicalizeEnvelopeTools,
+} from "./tools.js";
 import type {
   BeforeCallDiagnostics,
   HostPipelineConfig,
@@ -23,9 +26,10 @@ export async function prepareBeforeCall(params: {
   diagnostics: BeforeCallDiagnostics;
 }> {
   const diagnostics: BeforeCallDiagnostics = { notes: [] };
+  const normalizedToolsEnvelope = canonicalizeEnvelopeTools(params.envelope);
 
   const stable = prepareStablePrefixEnvelope(
-    params.envelope,
+    normalizedToolsEnvelope,
     params.helpers?.prepareStablePrefix,
   );
   diagnostics.stablePrefixApplied = stable.applied;
