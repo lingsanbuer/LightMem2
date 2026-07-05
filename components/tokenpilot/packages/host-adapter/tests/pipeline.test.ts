@@ -14,6 +14,18 @@ import {
   applyStablePrefixToInstructions,
   applyStablePrefixToMessage,
 } from "../src/pipeline/stable-prefix.js";
+import { canonicalizeTools } from "../src/pipeline/tools.js";
+import { extractStablePrefixContract } from "../src/contracts/stable-prefix-contract.js";
+import {
+  fingerprintStablePrefixEnvelope,
+  serializeStablePrefixEnvelope,
+} from "../src/contracts/stable-prefix-contract.js";
+import {
+  auditStablePrefixEntropy,
+  diffStablePrefixSerialized,
+} from "../src/contracts/stable-prefix-audit.js";
+import type { SerializedStablePrefixContract } from "../src/contracts/stable-prefix-contract.js";
+import { normalizeStablePrefixText } from "../src/pipeline/message-text.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -339,7 +351,8 @@ test("applyStablePrefixToMessage rewrites root prompt and injects dynamic contex
   });
 
   assert.notEqual(result, envelope);
-  assert.match(String(result.messages[0]?.content ?? ""), /<WORKDIR>/);
+  assert.match(String(result.messages[0]?.content ?? ""), /Your working directory is: \/repo\/demo/);
+  assert.match(String(result.messages[0]?.content ?? ""), /agent=worker-123/);
   assert.match(String(result.messages[1]?.content ?? ""), /WORKDIR: \/repo\/demo/);
   assert.match(String(result.messages[1]?.content ?? ""), /AGENT_ID: worker-123/);
 });

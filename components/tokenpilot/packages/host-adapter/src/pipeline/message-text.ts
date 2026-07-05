@@ -2,6 +2,7 @@
 
 const SENDER_METADATA_BLOCK_RE =
   /(?:^|\n{1,2})Sender\s+\(untrusted metadata\):\s*```json\s*[\s\S]*?```(?:\n{1,2}|$)/gi;
+const ABSOLUTE_PATH_TOKEN_RE = /(?:[A-Za-z]:[\\/]|\/)[^\s"'`)\]}]+/g;
 
 export function extractContentText(content: any): string {
   if (typeof content === "string") return content;
@@ -80,6 +81,87 @@ export function prependTextToContent(content: any, extraText: string): any {
 
 export function normalizeText(input: string): string {
   return String(input ?? "").replace(/\s+/g, " ").trim();
+}
+
+function trimTrailingPathPunctuation(path: string): { path: string; trailing: string } {
+  let value = String(path ?? "");
+  let trailing = "";
+  while (/[.,;:!?]$/.test(value)) {
+    trailing = value.slice(-1) + trailing;
+    value = value.slice(0, -1);
+  }
+  return { path: value, trailing };
+}
+
+function normalizePathSlashes(path: string): string {
+  return String(path ?? "").replace(/\\/g, "/");
+}
+
+function normalizePathPrefix(path: string, prefix: string, label: string): string | null {
+  const normalizedPath = normalizePathSlashes(path);
+  const normalizedPrefix = normalizePathSlashes(prefix).replace(/\/+$/g, "");
+  if (!normalizedPrefix) return null;
+  if (normalizedPath === normalizedPrefix) return label;
+  if (normalizedPath.startsWith(`${normalizedPrefix}/`)) {
+    return `${label}${normalizedPath.slice(normalizedPrefix.length)}`;
+  }
+  return null;
+}
+
+function stablePathTail(path: string, segments = 2): string {
+  const parts = normalizePathSlashes(path).split("/").filter(Boolean);
+  if (parts.length === 0) return "";
+  return parts.slice(-Math.min(parts.length, segments)).join("/");
+}
+
+export function normalizeStablePrefixText(
+  text: string,
+  options?: {
+    workdir?: string;
+    homeDir?: string;
+  },
+): string {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return raw;
+  const homeDir = options?.homeDir ?? process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return raw.replace(ABSOLUTE_PATH_TOKEN_RE, (absolutePath: string, offset: number, source: string) => {
+    const previousChar = offset > 0 ? source[offset - 1] : "";
+    if (previousChar && /[A-Za-z0-9_.-]/.test(previousChar)) {
+      return absolutePath;
+    }
+
+    const { path, trailing } = trimTrailingPathPunctuation(absolutePath);
+    const normalized = normalizePathSlashes(path);
+    if (!normalized) return absolutePath;
+    if (normalized.includes("://")) return absolutePath;
+
+    const workdirReplacement = options?.workdir
+      ? normalizePathPrefix(normalized, options.workdir, "<WORKDIR>")
+      : null;
+    if (workdirReplacement) return `${workdirReplacement}${trailing}`;
+
+    const codexSkillMarker = "/.codex/skills/";
+    const codexSkillIndex = normalized.indexOf(codexSkillMarker);
+    if (codexSkillIndex >= 0) {
+      const suffix = normalized.slice(codexSkillIndex + codexSkillMarker.length);
+      return `<CODEX_SKILLS>/${suffix}${trailing}`;
+    }
+
+    const homeReplacement = homeDir
+      ? normalizePathPrefix(normalized, homeDir, "<HOME>")
+      : null;
+    if (homeReplacement) return `${homeReplacement}${trailing}`;
+
+    const nodeModulesMarker = "/node_modules/";
+    const nodeModulesIndex = normalized.indexOf(nodeModulesMarker);
+    if (nodeModulesIndex >= 0) {
+      const suffix = normalized.slice(nodeModulesIndex + nodeModulesMarker.length);
+      return `<NODE_MODULES>/${suffix}${trailing}`;
+    }
+
+    const tail = stablePathTail(normalized, normalized.split("/").includes(".codex") ? 3 : 2);
+    return `${tail ? `<ABS_PATH>/${tail}` : "<ABS_PATH>"}${trailing}`;
+  });
 }
 
 function stripUntrustedSenderMetadata(text: string): string {
@@ -161,6 +243,7 @@ export function rewriteTextForStablePrefix(promptText: string): StablePrefixText
     /(\[MISSING\]\s+Expected at:\s*)(?:[A-Za-z]:[\\/]|\/)[^\n\r]*[\\/]+([^\\/\n\r]+)/g,
     "$1$2",
   );
+  canonical = normalizeStablePrefixText(canonical, { workdir });
 
   const dynamicLines: string[] = [];
   if (workdir) dynamicLines.push(`- WORKDIR: ${workdir}`);
