@@ -250,6 +250,10 @@ export function createClaudeMessagesPayloadCodec(
         metadata: {
           responseId: typeof response.id === "string" ? response.id : undefined,
           stopReason: typeof response.stop_reason === "string" ? response.stop_reason : undefined,
+          promptCacheKey:
+            typeof response.prompt_cache_key === "string"
+              ? response.prompt_cache_key
+              : undefined,
         },
       };
     },

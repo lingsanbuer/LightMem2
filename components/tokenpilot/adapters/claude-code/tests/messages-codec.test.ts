@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { prepareBeforeCall } from "@tokenpilot/host-adapter";
 import {
   createClaudeMessagesPayloadCodec,
   extractMessagesInputText,
@@ -92,4 +93,33 @@ test("claude session resolver synthesizes a per-request session id when host ses
   assert.notEqual(requestA.session.sessionId, requestB.session.sessionId);
   assert.equal((payloadA.metadata as Record<string, unknown>)?.tokenpilotSyntheticSessionId, requestA.session.sessionId);
   assert.equal((payloadB.metadata as Record<string, unknown>)?.tokenpilotSyntheticSessionId, requestB.session.sessionId);
+});
+
+test("claude request path canonicalizes tools before encode", async () => {
+  const codec = createClaudeMessagesPayloadCodec();
+  const request = codec.decodeRequest({
+    model: "claude-sonnet-4-6",
+    stream: false,
+    system: "stay stable",
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: "hi" }],
+      },
+    ],
+    tools: [
+      { type: "function", name: "z_tool", input_schema: { type: "object", properties: { z: { type: "number" }, a: { type: "number" } } } },
+      { type: "function", name: "a_tool", input_schema: { type: "object", properties: { b: { type: "boolean" }, a: { type: "boolean" } } } },
+    ],
+    metadata: { sessionId: "sess-tools" },
+  });
+
+  const prepared = await prepareBeforeCall({ envelope: request, config: { mode: "normal" } });
+  const encoded = codec.encodeRequest(prepared.envelope) as any;
+
+  assert.equal(Array.isArray(encoded.tools), true);
+  assert.equal(encoded.tools[0]?.name, "a_tool");
+  assert.equal(encoded.tools[1]?.name, "z_tool");
+  assert.deepEqual(Object.keys(encoded.tools[0]?.input_schema?.properties ?? {}), ["a", "b"]);
+  assert.deepEqual(Object.keys(encoded.tools[1]?.input_schema?.properties ?? {}), ["a", "z"]);
 });

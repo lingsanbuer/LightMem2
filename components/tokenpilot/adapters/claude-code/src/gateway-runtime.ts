@@ -27,6 +27,7 @@ import {
 import { prepareClaudeStablePrefix } from "./stable-prefix.js";
 import { appendClaudeCodeTrace } from "./trace.js";
 import { defaultClaudeCodeGatewayForwarder, resolveClaudeCodeUpstream } from "./upstream.js";
+import { appendClaudeCodeCacheAuditRecord, buildClaudeCodeCacheAuditSnapshot } from "./cache-audit.js";
 
 export type ClaudeCodeGatewayRuntime = {
   baseUrl: string;
@@ -237,6 +238,16 @@ export async function startClaudeCodeGatewayRuntime(params: {
       const reducedRequestText = typeof prepared.envelope.metadata?.inputText === "string"
         ? prepared.envelope.metadata.inputText
         : "";
+      const cacheAuditSnapshot = buildClaudeCodeCacheAuditSnapshot({
+        envelope: prepared.envelope,
+        sessionId,
+        model: prepared.envelope.model,
+        stream: prepared.envelope.stream,
+        requestPromptCacheKey:
+          typeof prepared.envelope.metadata?.promptCacheKey === "string"
+            ? prepared.envelope.metadata.promptCacheKey
+            : null,
+      });
 
       await appendClaudeCodeTrace(config.stateDir, {
         stage: "gateway_before_call",
@@ -279,6 +290,13 @@ export async function startClaudeCodeGatewayRuntime(params: {
             model: prepared.envelope.model,
             originalRequestText,
             reducedRequestText,
+          });
+          await appendClaudeCodeCacheAuditRecord({
+            stateDir: config.stateDir,
+            snapshot: cacheAuditSnapshot,
+            responsePromptCacheKey: null,
+            usage: snapshot.usage ?? null,
+            status: upstreamResp.status,
           });
           await appendClaudeCodeTrace(config.stateDir, {
             stage: "gateway_after_call",
@@ -334,12 +352,17 @@ export async function startClaudeCodeGatewayRuntime(params: {
       let assistantChars = 0;
       let responseId: string | undefined;
       let previousResponseId: string | undefined;
+      let responsePromptCacheKey: string | undefined;
+      let decodedUsage: Record<string, unknown> | null = null;
       try {
         const decoded = codec.decodeResponse(JSON.parse(upstreamResp.text), prepared.envelope);
         assistantChars = decoded.assistantText?.length ?? 0;
         responseId = typeof decoded.metadata?.responseId === "string" ? decoded.metadata.responseId : undefined;
         previousResponseId =
           typeof decoded.metadata?.previousResponseId === "string" ? decoded.metadata.previousResponseId : undefined;
+        responsePromptCacheKey =
+          typeof decoded.metadata?.promptCacheKey === "string" ? decoded.metadata.promptCacheKey : undefined;
+        decodedUsage = decoded.usage ?? null;
       } catch {
         assistantChars = 0;
       }
@@ -349,6 +372,13 @@ export async function startClaudeCodeGatewayRuntime(params: {
         model: prepared.envelope.model,
         originalRequestText,
         reducedRequestText,
+      });
+      await appendClaudeCodeCacheAuditRecord({
+        stateDir: config.stateDir,
+        snapshot: cacheAuditSnapshot,
+        responsePromptCacheKey,
+        usage: decodedUsage,
+        status: upstreamResp.status,
       });
       await appendClaudeCodeTrace(config.stateDir, {
         stage: "gateway_after_call",
