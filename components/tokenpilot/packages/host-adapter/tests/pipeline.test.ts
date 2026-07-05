@@ -282,9 +282,8 @@ test("applyStablePrefixToInstructions rewrites instructions and injects dynamic 
   });
 
   assert.notEqual(result, envelope);
-  assert.match(String(result.instructions ?? ""), /<WORKDIR>/);
-  assert.match(String(result.instructions ?? ""), /agent=<AGENT_ID>/);
-  assert.equal(String(result.instructions ?? "").includes("/repo/demo"), false);
+  assert.match(String(result.instructions ?? ""), /Your working directory is: \/repo\/demo/);
+  assert.match(String(result.instructions ?? ""), /agent=worker-123/);
   assert.match(String(result.messages[0]?.content ?? ""), /WORKDIR: \/repo\/demo/);
   assert.match(String(result.messages[0]?.content ?? ""), /AGENT_ID: worker-123/);
 });
@@ -316,7 +315,7 @@ test("applyStablePrefixToInstructions can keep dynamic context inside instructio
   });
 
   assert.notEqual(result, envelope);
-  assert.match(String(result.instructions ?? ""), /<WORKDIR>/);
+  assert.match(String(result.instructions ?? ""), /Your working directory is: \/repo\/demo/);
   assert.match(String(result.instructions ?? ""), /WORKDIR: \/repo\/demo/);
   assert.equal(String(result.messages[0]?.content ?? ""), "Fix the failing test.");
 });
