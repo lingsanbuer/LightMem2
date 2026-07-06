@@ -31,11 +31,27 @@ import { appendClaudeCodeTrace } from "./trace.js";
 import { defaultClaudeCodeGatewayForwarder, resolveClaudeCodeUpstream } from "./upstream.js";
 import { appendClaudeCodeCacheAuditRecord, buildClaudeCodeCacheAuditSnapshot } from "./cache-audit.js";
 import { buildAnthropicGatewayModelList, mapClaudeVisibleModelToUpstreamModel } from "./provider-profile.js";
+import { resolveLatestClaudeCodeSessionId } from "./session-state.js";
 
 export type ClaudeCodeGatewayRuntime = {
   baseUrl: string;
   close(): Promise<void>;
 };
+
+function isSyntheticClaudeSessionId(sessionId: string): boolean {
+  return sessionId.startsWith("claude-synth-");
+}
+
+async function resolveObservedClaudeSessionId(stateDir: string, sessionId: string): Promise<string> {
+  if (!isSyntheticClaudeSessionId(sessionId)) {
+    return sessionId;
+  }
+  const latestSessionId = await resolveLatestClaudeCodeSessionId(stateDir);
+  if (latestSessionId && !isSyntheticClaudeSessionId(latestSessionId)) {
+    return latestSessionId;
+  }
+  return sessionId;
+}
 
 function normalizeRequestHeaders(
   headers: NodeJS.Dict<string | string[]>,
@@ -283,7 +299,7 @@ export async function startClaudeCodeGatewayRuntime(params: {
         model: mapClaudeVisibleModelToUpstreamModel(config, envelope.model),
       };
       const authorization = typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
-      const sessionId = envelope.session.sessionId;
+      const sessionId = await resolveObservedClaudeSessionId(config.stateDir, envelope.session.sessionId);
       const model = envelope.model;
       const workspaceHint = extractWorkspaceHint(envelope);
       const prepared = await prepareObservedBeforeCall<ClaudeReductionSummary>({

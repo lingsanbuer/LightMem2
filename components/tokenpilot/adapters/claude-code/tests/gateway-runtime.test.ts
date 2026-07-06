@@ -14,6 +14,7 @@ import { readVisualSessionData, readVisualSessionList } from "@tokenpilot/produc
 import { normalizeTokenPilotClaudeCodeConfig } from "../src/config.js";
 import { startClaudeCodeGatewayRuntime } from "../src/gateway-runtime.js";
 import { createConsoleLogger } from "../src/logger.js";
+import { upsertClaudeCodeSessionSnapshot } from "../src/session-state.js";
 
 async function reserveUnusedPort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -500,6 +501,89 @@ test("gateway runtime records session-state and ux-effects after a reduced reque
     assert.match(visual.stability[0]?.developerCanonical ?? "", /<WORKDIR>/);
     assert.match(visual.stability[0]?.dynamicContextText ?? "", /WORKDIR: \/repo\/demo/);
     assert.ok((visual.reduction[0]?.savedChars ?? 0) > 0);
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("gateway runtime reuses the latest real Claude hook session when request markers are absent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-gateway-session-merge-"));
+  const proxyPort = await reserveUnusedPort();
+  const stateDir = join(dir, "state");
+  const longToolPayload = `payload\n${"line\n".repeat(800)}`;
+  const forwarder: HostGatewayForwarder = {
+    async request() {
+      return {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+        text: JSON.stringify({
+          id: "msg_merge_1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          usage: { input_tokens: 10, output_tokens: 2 },
+          stop_reason: "end_turn",
+        }),
+      };
+    },
+    async requestStream() {
+      throw new Error("stream path should not be used in this test");
+    },
+  };
+
+  await upsertClaudeCodeSessionSnapshot(stateDir, "claude-real-session-1", {
+    lastHookEvent: "SessionStart",
+    workspaceHint: "/repo/demo",
+  });
+
+  const runtime = await startClaudeCodeGatewayRuntime({
+    config: normalizeTokenPilotClaudeCodeConfig({
+      stateDir,
+      proxyPort,
+    }),
+    logger: createConsoleLogger(false),
+    forwarder,
+  });
+
+  try {
+    for (let turn = 0; turn < 2; turn += 1) {
+      const response = await fetch(`${runtime.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          stream: false,
+          system: "Your working directory is: /repo/demo",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: `hello ${turn}` },
+                { type: "tool_result", tool_use_id: `toolu_${turn}`, content: longToolPayload },
+              ],
+            },
+          ],
+          max_tokens: 64,
+        }),
+      });
+      assert.equal(response.status, 200);
+    }
+
+    const latest = JSON.parse(
+      await readFile(join(stateDir, "session-state", "latest.json"), "utf8"),
+    ) as { sessionId: string };
+    assert.equal(latest.sessionId, "claude-real-session-1");
+
+    const sessions = await readVisualSessionList(stateDir);
+    assert.deepEqual(sessions.map((entry) => entry.sessionId), ["claude-real-session-1"]);
+
+    const visual = await readVisualSessionData(stateDir, "claude-real-session-1");
+    assert.equal(visual.sessionId, "claude-real-session-1");
   } finally {
     await runtime.close();
     await rm(dir, { recursive: true, force: true });
