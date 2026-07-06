@@ -27,6 +27,7 @@ import {
 import { installLightmem2CliBin } from "../../shared/cli-bin-install.js";
 import { rememberCliHostPathOverrides } from "../../shared/cli-context.js";
 import { installHostCliBin } from "../../shared/host-cli-bin-install.js";
+import { rewriteInstalledClaudeVisibleModel } from "./provider-profile.js";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -142,13 +143,6 @@ function shouldAdoptSettingsUpstream(
   return !normalizedCurrent || normalizedCurrent === normalizedDefault;
 }
 
-function mapDeepSeekModelToClaudeVisibleModel(value: unknown): string | undefined {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (!normalized.startsWith("deepseek-")) return undefined;
-  if (normalized.includes("flash")) return "claude-haiku-4-5";
-  return "claude-sonnet-4-6";
-}
-
 export async function installClaudeCodeTokenPilot(params?: {
   settingsPath?: string;
   tokenPilotConfigPath?: string;
@@ -198,6 +192,7 @@ export async function installClaudeCodeTokenPilot(params?: {
   const existingAnthropicBaseUrl = typeof existingEnv.ANTHROPIC_BASE_URL === "string"
     ? existingEnv.ANTHROPIC_BASE_URL.trim()
     : "";
+  const existingRootModel = typeof root.model === "string" ? root.model.trim() : "";
   const proxyBaseUrl = proxyBaseUrlForPort(config.proxyPort);
   if (shouldAdoptSettingsUpstream(config.upstreamBaseUrl, existingAnthropicBaseUrl, proxyBaseUrl)) {
     config.upstreamBaseUrl = existingAnthropicBaseUrl.replace(/\/+$/, "");
@@ -211,6 +206,7 @@ export async function installClaudeCodeTokenPilot(params?: {
   ] as const;
   const firstDeepSeekModel = visibleModelEnvKeys
     .map((key) => typeof existingEnv[key] === "string" ? String(existingEnv[key]).trim() : "")
+    .concat(existingRootModel ? [existingRootModel] : [])
     .find((value) => value.toLowerCase().startsWith("deepseek-"));
   if (!String(config.upstreamModel ?? "").trim() && firstDeepSeekModel) {
     config.upstreamModel = firstDeepSeekModel;
@@ -224,11 +220,12 @@ export async function installClaudeCodeTokenPilot(params?: {
     [CLAUDE_TOOL_SEARCH_ENV]: CLAUDE_TOOL_SEARCH_DEFAULT,
   };
   for (const key of visibleModelEnvKeys) {
-    const visibleModel = mapDeepSeekModelToClaudeVisibleModel(env[key]);
+    const visibleModel = rewriteInstalledClaudeVisibleModel(config, env[key]);
     if (visibleModel) {
       env[key] = visibleModel;
     }
   }
+  const rewrittenRootModel = rewriteInstalledClaudeVisibleModel(config, root.model);
   const hooks = asRecord(root.hooks);
   const command = resolveClaudeCodeHookCommandForInstall();
   const handler = () => ({
@@ -242,6 +239,7 @@ export async function installClaudeCodeTokenPilot(params?: {
   hooks.SessionEnd = upsertHookGroup(hooks.SessionEnd, { hooks: [handler()] });
   const next = {
     ...root,
+    ...(rewrittenRootModel ? { model: rewrittenRootModel } : {}),
     env,
     hooks,
   };

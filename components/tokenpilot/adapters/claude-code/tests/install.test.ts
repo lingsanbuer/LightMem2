@@ -171,6 +171,38 @@ test("installClaudeCodeTokenPilot preserves custom Claude upstream from settings
   }
 });
 
+test("installClaudeCodeTokenPilot rewrites top-level deepseek model to a Claude-visible model and remembers the upstream model", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-install-root-model-"));
+  try {
+    const settingsPath = join(dir, "settings.json");
+    const tokenPilotConfigPath = join(dir, "tokenpilot.json");
+    await writeFile(
+      settingsPath,
+      `${JSON.stringify({ model: "deepseek-chat" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    await installClaudeCodeTokenPilot({
+      settingsPath,
+      mcpConfigPath: join(dir, ".claude.json"),
+      tokenPilotConfigPath,
+      probeMcp: false,
+    });
+
+    const settings = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      model?: string;
+    };
+    assert.equal(settings.model, "claude-sonnet-4-6");
+
+    const tokenPilotConfig = JSON.parse(await readFile(tokenPilotConfigPath, "utf8")) as {
+      upstreamModel?: string;
+    };
+    assert.equal(tokenPilotConfig.upstreamModel, "deepseek-chat");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("installClaudeCodeTokenPilot does not override an explicit TokenPilot upstream", async () => {
   const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-install-keep-upstream-"));
   try {

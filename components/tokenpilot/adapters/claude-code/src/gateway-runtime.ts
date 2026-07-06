@@ -30,25 +30,12 @@ import { prepareClaudeStablePrefix } from "./stable-prefix.js";
 import { appendClaudeCodeTrace } from "./trace.js";
 import { defaultClaudeCodeGatewayForwarder, resolveClaudeCodeUpstream } from "./upstream.js";
 import { appendClaudeCodeCacheAuditRecord, buildClaudeCodeCacheAuditSnapshot } from "./cache-audit.js";
+import { buildAnthropicGatewayModelList, mapClaudeVisibleModelToUpstreamModel } from "./provider-profile.js";
 
 export type ClaudeCodeGatewayRuntime = {
   baseUrl: string;
   close(): Promise<void>;
 };
-
-type AnthropicModelListEntry = {
-  type: "model";
-  id: string;
-  display_name: string;
-  created_at: string;
-};
-
-const DEEPSEEK_VISIBLE_CLAUDE_MODELS = [
-  "claude-sonnet-4-6",
-  "claude-sonnet-4-5",
-  "claude-opus-4-1",
-  "claude-haiku-4-5",
-] as const;
 
 function normalizeRequestHeaders(
   headers: NodeJS.Dict<string | string[]>,
@@ -88,87 +75,6 @@ function countAnthropicMessagePayloadText(payload: unknown): string {
       .join("\n")
     : "";
   return [system, messagesText].filter(Boolean).join("\n");
-}
-
-function isDeepSeekAnthropicUpstream(baseUrl: string): boolean {
-  return /api\.deepseek\.com\/anthropic\/?$/i.test(baseUrl.trim());
-}
-
-function defaultDeepSeekUpstreamModelForVisibleModel(model: string): string {
-  const normalized = model.trim().toLowerCase();
-  if (!normalized) return "deepseek-v4-pro";
-  if (normalized.startsWith("deepseek-")) return model.trim();
-  if (normalized.startsWith("claude-haiku")) return "deepseek-v4-flash";
-  if (normalized.startsWith("claude-sonnet")) return "deepseek-v4-pro";
-  if (normalized.startsWith("claude-opus")) return "deepseek-v4-pro";
-  return "deepseek-v4-pro";
-}
-
-function resolveDeepSeekUpstreamModel(config: TokenPilotClaudeCodeConfig, requestedModel: string): string {
-  const configured = String(config.upstreamModel ?? "").trim();
-  const normalizedRequested = requestedModel.trim().toLowerCase();
-  if (normalizedRequested.startsWith("deepseek-")) {
-    return requestedModel.trim();
-  }
-  return configured || defaultDeepSeekUpstreamModelForVisibleModel(requestedModel);
-}
-
-function mapClaudeVisibleModelToUpstreamModel(
-  config: TokenPilotClaudeCodeConfig,
-  model: string,
-): string {
-  if (!isDeepSeekAnthropicUpstream(config.upstreamBaseUrl)) {
-    return model;
-  }
-  const normalized = model.trim().toLowerCase();
-  if (normalized.startsWith("claude-") || normalized.startsWith("deepseek-")) {
-    return resolveDeepSeekUpstreamModel(config, model);
-  }
-  return model;
-}
-
-function uniqueStrings(values: Array<string | undefined>): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const normalized = String(value ?? "").trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-}
-
-function buildAnthropicGatewayModelList(config: TokenPilotClaudeCodeConfig): {
-  data: AnthropicModelListEntry[];
-  has_more: false;
-  first_id: string | null;
-  last_id: string | null;
-} {
-  const createdAt = "2026-01-01T00:00:00Z";
-  const ids = isDeepSeekAnthropicUpstream(config.upstreamBaseUrl)
-    ? uniqueStrings([
-      ...DEEPSEEK_VISIBLE_CLAUDE_MODELS,
-    ])
-    : uniqueStrings([
-      config.upstreamModel,
-      "claude-sonnet-4-6",
-      "claude-opus-4-1",
-      "claude-sonnet-4-5",
-      "claude-haiku-4-5",
-    ]);
-  const data = ids.map((id) => ({
-    type: "model" as const,
-    id,
-    display_name: id,
-    created_at: createdAt,
-  }));
-  return {
-    data,
-    has_more: false,
-    first_id: data[0]?.id ?? null,
-    last_id: data[data.length - 1]?.id ?? null,
-  };
 }
 
 async function recordClaudeRequestReductionUx(params: {
