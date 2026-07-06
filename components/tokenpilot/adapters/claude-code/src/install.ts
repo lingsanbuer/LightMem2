@@ -218,7 +218,7 @@ export async function installClaudeCodeTokenPilot(params?: {
   await writeTokenPilotClaudeCodeConfig(config, tokenPilotConfigPath);
   const mcpServer = resolveClaudeCodeMcpServerSpecForInstall(config.stateDir);
   const mcpProbeServer = resolveClaudeCodeMcpServerSpecForProbe(config.stateDir);
-  const env = {
+  const env: Record<string, unknown> = {
     ...existingEnv,
     ANTHROPIC_BASE_URL: proxyBaseUrl,
     [CLAUDE_TOOL_SEARCH_ENV]: CLAUDE_TOOL_SEARCH_DEFAULT,
