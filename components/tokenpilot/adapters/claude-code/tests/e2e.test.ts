@@ -13,6 +13,7 @@ import {
   withTempHome,
   type HostGatewayForwarder,
 } from "@tokenpilot/host-adapter";
+import { readVisualSessionData, readVisualSessionList } from "@tokenpilot/product-surface";
 import { MEMORY_FAULT_RECOVER_TOOL_NAME, handleMcpRequest } from "../../../products/mcp/src/index.js";
 import {
   defaultTokenPilotClaudeCodeConfigPath,
@@ -201,6 +202,18 @@ test("Claude Code host e2e wires install, gateway reduction, report/visual, and 
         ],
       },
     });
+
+    const sessions = await readVisualSessionList(stateDir);
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]?.sessionId, "sess-e2e-1");
+    assert.equal(sessions[0]?.stabilityCount, 1);
+    assert.ok((sessions[0]?.reductionCount ?? 0) > 0);
+
+    const visual = await readVisualSessionData(stateDir, "sess-e2e-1");
+    assert.equal(visual.stability.length, 1);
+    assert.ok(visual.reduction.length > 0);
+    assert.match(visual.stability[0]?.developerCanonical ?? "", /<WORKDIR>/);
+    assert.match(visual.stability[0]?.dynamicContextText ?? "", /WORKDIR: \/repo\/demo/);
 
     await runtime?.close();
   });
