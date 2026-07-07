@@ -786,12 +786,158 @@ function findMatchingCacheAuditGroup(entry, groups) {
   ) || null;
 }
 
+function buildStabilityOptimizationHint(params) {
+  const matchedEntry = params?.matchedCacheEntry || null;
+  const matchedResult = params?.matchedResult || "unmatched";
+  const rewriteDetected = Boolean(params?.rewriteDetected);
+  const entropyKinds = Array.isArray(matchedEntry?.entropyKinds) ? matchedEntry.entropyKinds : [];
+  const driftKeys = Array.isArray(matchedEntry?.driftKeys) ? matchedEntry.driftKeys : [];
+  if (matchedResult === "warm hit") {
+    return "Warm hit: keep this prefix shape stable and watch for new drift or entropy spikes before changing sanitization.";
+  }
+  if (driftKeys.length > 0) {
+    return "Fingerprint drift: move volatile prompt fragments out of stable prefix, or shift them into dynamic context before the next request.";
+  }
+  if (entropyKinds.includes("abs_path")) {
+    return "Absolute-path entropy: strengthen path canonicalization so stable prefix keeps placeholders instead of host-specific filesystem paths.";
+  }
+  if (entropyKinds.includes("uuid") || entropyKinds.includes("timestamp") || entropyKinds.includes("long_number")) {
+    return "Runtime-ID entropy: strip timestamps, UUIDs, or long numeric identifiers out of stable prefix and keep them in dynamic context only.";
+  }
+  if (rewriteDetected) {
+    return "Response key rewrite only: treat this as an observability signal first; optimize request-side prefix stability before reacting to response key churn.";
+  }
+  if (matchedResult === "cold miss") {
+    return "Cold miss without obvious drift: compare this request against the previous fingerprint group and check for subtle tool or prompt-structure changes.";
+  }
+  return "No matching cache audit entry: expand observability coverage first, then re-check whether this stability snapshot lines up with a request-side cache record.";
+}
+
+function describeStabilityCause(params) {
+  const matchedEntry = params?.matchedCacheEntry || null;
+  const matchedResult = params?.matchedResult || "unmatched";
+  const rewriteDetected = Boolean(params?.rewriteDetected);
+  const entropyKinds = Array.isArray(matchedEntry?.entropyKinds) ? matchedEntry.entropyKinds : [];
+  const driftKeys = Array.isArray(matchedEntry?.driftKeys) ? matchedEntry.driftKeys : [];
+  if (matchedResult === "warm hit") {
+    return "Warm hit already happened for this prefix fingerprint.";
+  }
+  if (driftKeys.length > 0 && entropyKinds.length > 0) {
+    return "Cold miss: both prefix drift and unstable tokens were detected.";
+  }
+  if (driftKeys.length > 0) {
+    return "Cold miss: stable-prefix text drifted across requests.";
+  }
+  if (entropyKinds.includes("abs_path")) {
+    return "Cold miss: absolute filesystem paths are still leaking into the stable prefix.";
+  }
+  if (entropyKinds.includes("uuid") || entropyKinds.includes("timestamp") || entropyKinds.includes("long_number")) {
+    return "Cold miss: runtime identifiers are still leaking into the stable prefix.";
+  }
+  if (rewriteDetected) {
+    return "Request side looked stable, but upstream rewrote the response cache key.";
+  }
+  if (matchedResult === "cold miss") {
+    return "Cold miss: no explicit drift hotspot was recorded, so this is likely structural prompt churn.";
+  }
+  return "No matched cache-audit request was found for this stability snapshot yet.";
+}
+
+function buildWarmCacheActionItems(params) {
+  const matchedEntry = params?.matchedCacheEntry || null;
+  const matchedResult = params?.matchedResult || "unmatched";
+  const rewriteDetected = Boolean(params?.rewriteDetected);
+  const entropyKinds = Array.isArray(matchedEntry?.entropyKinds) ? matchedEntry.entropyKinds : [];
+  const driftKeys = Array.isArray(matchedEntry?.driftKeys) ? matchedEntry.driftKeys : [];
+  const items = [];
+  if (matchedResult === "warm hit") {
+    items.push("Keep the canonical stable-prefix text byte-stable across adjacent turns.");
+    items.push("Only let dynamic context change; avoid expanding new volatile lines back into the stable prefix.");
+    return items;
+  }
+  if (driftKeys.length > 0) {
+    items.push("Freeze the canonical stable-prefix text across turns; move changing lines into dynamic context instead of the stable core.");
+  }
+  if (entropyKinds.includes("abs_path")) {
+    items.push("Canonicalize absolute paths before fingerprinting so repeated requests keep the same placeholder-based prefix shape.");
+  }
+  if (entropyKinds.includes("uuid") || entropyKinds.includes("timestamp") || entropyKinds.includes("long_number")) {
+    items.push("Strip timestamps, UUIDs, and long numeric IDs out of the stable prefix and inject them only through dynamic context.");
+  }
+  if (rewriteDetected) {
+    items.push("Treat response-side cache-key rewrites as audit-only; the harness should keep request-side keys and prefix fingerprints stable first.");
+  }
+  if (items.length === 0 && matchedResult === "cold miss") {
+    items.push("Compare this request against the previous fingerprint group and keep tool ordering, prompt scaffolding, and stable-prefix framing identical.");
+  }
+  if (items.length === 0) {
+    items.push("Capture one more adjacent request so the harness can compare fingerprints and learn a stable warm-up target.");
+  }
+  return items;
+}
+
+function renderWarmCachePlan(item, matchedCacheEntry, matchedFingerprintGroup) {
+  const rewriteDetected = matchedCacheEntry?.requestPromptCacheKey
+    && matchedCacheEntry?.responsePromptCacheKey
+    && matchedCacheEntry.requestPromptCacheKey !== matchedCacheEntry.responsePromptCacheKey;
+  const matchedResult = Number(matchedCacheEntry?.cachedInputTokens || 0) > 0
+    ? "warm hit"
+    : matchedCacheEntry
+      ? "cold miss"
+      : "unmatched";
+  const currentState = describeStabilityCause({
+    matchedCacheEntry,
+    matchedResult,
+    rewriteDetected,
+  });
+  const targetState = matchedResult === "warm hit"
+    ? "Target state: keep the same fingerprint and let adjacent turns stay warm."
+    : "Target state: same request cache key + same stable-prefix fingerprint + cached input tokens > 0 on the next adjacent turn.";
+  const actionItems = buildWarmCacheActionItems({
+    matchedCacheEntry,
+    matchedResult,
+    rewriteDetected,
+  });
+  const matchedFingerprint = matchedFingerprintGroup?.stablePrefixFingerprint
+    || matchedCacheEntry?.stablePrefixFingerprint
+    || item.promptCacheKeyAfter
+    || "-";
+  return '<div class="pass-list" style="margin-top:16px;">'
+    + '<div class="pass-item"><strong>Warm Cache Plan</strong>'
+    + '<br />current state=' + escapeHtml(currentState)
+    + '<br />target state=' + escapeHtml(targetState)
+    + '<br />reference fingerprint=' + escapeHtml(matchedFingerprint)
+    + actionItems.map((line, index) => '<br />action ' + escapeHtml(String(index + 1)) + '=' + escapeHtml(line)).join("")
+    + '<br />diff guide=repeat the canonical shape below, and keep newly changing text in the dynamic-tail diff instead of the stable prefix.'
+    + '</div>'
+    + '</div>';
+}
+
 function renderPromptCacheTransition(item, matchedCacheEntry, matchedFingerprintGroup, cacheAuditSummary) {
   const matchedFingerprint = matchedFingerprintGroup?.stablePrefixFingerprint
     || matchedCacheEntry?.stablePrefixFingerprint
     || "-";
   const matchedRequestKey = matchedCacheEntry?.requestPromptCacheKey || "-";
   const matchedResponseKey = matchedCacheEntry?.responsePromptCacheKey || "-";
+  const matchedEntropy = Array.isArray(matchedCacheEntry?.entropyKinds) && matchedCacheEntry.entropyKinds.length > 0
+    ? matchedCacheEntry.entropyKinds.join(", ")
+    : "(none)";
+  const matchedDrift = Array.isArray(matchedCacheEntry?.driftKeys) && matchedCacheEntry.driftKeys.length > 0
+    ? matchedCacheEntry.driftKeys.join(", ")
+    : "(none)";
+  const rewriteDetected = matchedCacheEntry?.requestPromptCacheKey
+    && matchedCacheEntry?.responsePromptCacheKey
+    && matchedCacheEntry.requestPromptCacheKey !== matchedCacheEntry.responsePromptCacheKey;
+  const matchedResult = Number(matchedCacheEntry?.cachedInputTokens || 0) > 0
+    ? "warm hit"
+    : matchedCacheEntry
+      ? "cold miss"
+      : "unmatched";
+  const optimizationHint = buildStabilityOptimizationHint({
+    matchedCacheEntry,
+    matchedResult,
+    rewriteDetected,
+  });
   const warmSummary = cacheAuditSummary && Number(cacheAuditSummary.warmCandidates || 0) > 0
     ? fmtInt(cacheAuditSummary.warmHits || 0) + "/" + fmtInt(cacheAuditSummary.warmCandidates || 0)
       + " (" + String(cacheAuditSummary.hitRatePercent || 0) + "%)"
@@ -802,8 +948,13 @@ function renderPromptCacheTransition(item, matchedCacheEntry, matchedFingerprint
     + ' -> ' + escapeHtml(item.promptCacheKeyAfter || "-")
     + '<br />matched fingerprint=' + escapeHtml(matchedFingerprint)
     + ' · warm hits=' + escapeHtml(warmSummary)
+    + '<br />matched result=' + escapeHtml(matchedResult)
+    + ' · rewrite detected=' + escapeHtml(String(Boolean(rewriteDetected)))
     + '<br />matched request key=' + escapeHtml(matchedRequestKey)
     + '<br />matched response key=' + escapeHtml(matchedResponseKey)
+    + '<br />matched entropy=' + escapeHtml(matchedEntropy)
+    + '<br />matched drift=' + escapeHtml(matchedDrift)
+    + '<br />optimization hint=' + escapeHtml(optimizationHint)
     + '</div>'
     + '</div>';
 }
@@ -1098,8 +1249,9 @@ function renderStability(item) {
   const data = state.sessionData.get((state.activeHost || "") + "::" + state.activeSessionId) || {};
   const cacheAuditSummary = data.cacheAuditSummary || null;
   const recentCacheAudit = data.recentCacheAudit || [];
+  const cacheAuditWindow = data.cacheAuditWindow || recentCacheAudit;
   const recentCacheAuditGroups = data.recentCacheAuditGroups || [];
-  const matchedCacheEntry = findMatchingCacheAuditEntry(item, recentCacheAudit);
+  const matchedCacheEntry = findMatchingCacheAuditEntry(item, cacheAuditWindow);
   const matchedFingerprintGroup = findMatchingCacheAuditGroup(matchedCacheEntry, recentCacheAuditGroups);
   el.panelTitle.textContent = "Cache Stability";
   el.panelMeta.innerHTML = '<span>' + escapeHtml(fmtDate(item.at)) + '</span>'
@@ -1117,8 +1269,8 @@ function renderStability(item) {
       : []),
   ].map(([label, value]) => '<div class="chip">' + escapeHtml(label) + ': ' + escapeHtml(value) + '</div>').join("");
   el.compareRoot.innerHTML = '<div class="pass-list">'
-    + renderDiffBlock("Root Prompt -> Canonical", item.developerBefore, item.developerCanonical)
-    + renderDiffBlock("Canonical -> Forwarded", item.developerCanonical, item.developerForwarded)
+    + renderDiffBlock("Current Prompt -> Suggested Stable Shape", item.developerBefore, item.developerCanonical)
+    + renderDiffBlock("Suggested Stable Shape -> Dynamic Tail Extraction", item.developerCanonical, item.developerForwarded)
     + '</div>';
   const dynamicContextBlock = item.dynamicContextText
     ? '<div class="pass-list" style="margin-top:16px;">'
@@ -1126,7 +1278,8 @@ function renderStability(item) {
       + '</div>'
     : "";
   el.passRoot.innerHTML =
-    renderPromptCacheTransition(item, matchedCacheEntry, matchedFingerprintGroup, cacheAuditSummary)
+    renderWarmCachePlan(item, matchedCacheEntry, matchedFingerprintGroup)
+    + renderPromptCacheTransition(item, matchedCacheEntry, matchedFingerprintGroup, cacheAuditSummary)
     + renderStabilityContextPanels(item)
     + dynamicContextBlock
     + renderCacheAuditPanel(cacheAuditSummary)

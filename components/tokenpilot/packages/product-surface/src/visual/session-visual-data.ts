@@ -120,6 +120,7 @@ export type VisualSessionData = {
   uxAggregate?: VisualUxAggregate | null;
   recentReduction?: RecentReductionMetricsSummary | null;
   cacheAuditSummary?: CacheAuditSummary | null;
+  cacheAuditWindow?: VisualCacheAuditEntry[];
   recentCacheAudit?: VisualCacheAuditEntry[];
   recentCacheAuditGroups?: VisualCacheAuditGroup[];
   limits?: {
@@ -490,7 +491,8 @@ export async function readVisualSessionDataWithOptions(
     readRecentCacheAuditRecordsForSession(stateDir, sessionId, 64),
   ]);
   const cacheAuditSummary = cacheAuditRecords.length > 0 ? summarizeCacheAudit(cacheAuditRecords) : null;
-  const recentCacheAudit = sortByAtDesc(cacheAuditRecords).slice(0, 8).map(toVisualCacheAuditEntry);
+  const cacheAuditWindow = sortByAtDesc(cacheAuditRecords).map(toVisualCacheAuditEntry);
+  const recentCacheAudit = cacheAuditWindow.slice(0, 8);
   const allReductionCalls = groupReductionSnapshotsByRequest(allReduction);
   const stabilityLimit = Number.isFinite(options?.stabilityLimit)
     ? Math.max(0, Math.trunc(options?.stabilityLimit ?? 0))
@@ -517,6 +519,7 @@ export async function readVisualSessionDataWithOptions(
     uxAggregate,
     recentReduction: recentMetrics ? summarizeRecentReductionMetrics(recentMetrics) : null,
     cacheAuditSummary,
+    cacheAuditWindow,
     recentCacheAudit,
     recentCacheAuditGroups: groupVisualCacheAuditEntries(recentCacheAudit),
     limits: {

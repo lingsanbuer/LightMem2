@@ -98,6 +98,16 @@ test("renderVisualPageScript includes cache audit detail panel labels", () => {
   assert.match(script, /Prefix Stability Snapshot/);
   assert.match(script, /prompt cache transition=/);
   assert.match(script, /matched fingerprint=/);
+  assert.match(script, /matched result=/);
+  assert.match(script, /rewrite detected=/);
+  assert.match(script, /matched entropy=/);
+  assert.match(script, /matched drift=/);
+  assert.match(script, /optimization hint=/);
+  assert.match(script, /Warm Cache Plan/);
+  assert.match(script, /current state=/);
+  assert.match(script, /target state=/);
+  assert.match(script, /action '/);
+  assert.match(script, /diff guide=/);
   assert.match(script, /Developer Before/);
   assert.match(script, /Developer Canonical/);
   assert.match(script, /Developer Forwarded/);
@@ -126,6 +136,8 @@ test("renderVisualPageScript includes cache audit detail panel labels", () => {
   assert.match(script, /cached tokens=/);
   assert.match(script, /entropy hotspots=/);
   assert.match(script, /drift hotspots=/);
+  assert.match(script, /Current Prompt -> Suggested Stable Shape/);
+  assert.match(script, /Suggested Stable Shape -> Dynamic Tail Extraction/);
 });
 
 test("renderVisualPageScript is syntactically valid javascript", () => {

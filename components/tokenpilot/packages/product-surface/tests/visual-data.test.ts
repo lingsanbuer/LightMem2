@@ -397,6 +397,42 @@ test("readVisualSessionDataWithOptions limits returned stability, reduction call
   }
 });
 
+test("readVisualSessionData keeps a larger cache-audit matching window than the rendered recent list", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tokenpilot-product-surface-visual-cache-window-"));
+  try {
+    const stateDir = root;
+    const sessionId = "session-cache-window";
+    await writeFile(
+      join(stateDir, "cache-audit.jsonl"),
+      Array.from({ length: 12 }, (_item, index) => JSON.stringify({
+        at: `2026-07-07T12:${String(index).padStart(2, "0")}:00.000Z`,
+        sessionId,
+        model: "gpt-5.4",
+        stream: false,
+        stablePrefixFingerprint: `fp-${index}`,
+        stablePrefix: { schemaVersion: 1, stableCore: [], semiStableContext: [] },
+        entropyFindings: [],
+        driftReasons: [],
+        requestPromptCacheKey: `pk-${index}`,
+        responsePromptCacheKey: `pk-${index}`,
+        cachedInputTokens: index === 11 ? 64 : 0,
+        usage: { input_tokens: 100 },
+        status: 200,
+      })).join("\n"),
+    );
+
+    const data = await readVisualSessionData(stateDir, sessionId);
+    assert.equal(data.cacheAuditWindow?.length, 12);
+    assert.equal(data.recentCacheAudit?.length, 8);
+    assert.equal(data.cacheAuditWindow?.[0]?.requestPromptCacheKey, "pk-11");
+    assert.equal(data.cacheAuditWindow?.[11]?.requestPromptCacheKey, "pk-0");
+    assert.equal(data.recentCacheAudit?.[0]?.requestPromptCacheKey, "pk-11");
+    assert.equal(data.recentCacheAudit?.[7]?.requestPromptCacheKey, "pk-4");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("readVisualSessionListWithOptions paginates ordered sessions", async () => {
   const root = await mkdtemp(join(tmpdir(), "tokenpilot-product-surface-visual-session-page-"));
   try {
