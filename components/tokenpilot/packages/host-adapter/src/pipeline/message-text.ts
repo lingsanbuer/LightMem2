@@ -3,6 +3,45 @@
 const SENDER_METADATA_BLOCK_RE =
   /(?:^|\n{1,2})Sender\s+\(untrusted metadata\):\s*```json\s*[\s\S]*?```(?:\n{1,2}|$)/gi;
 const ABSOLUTE_PATH_TOKEN_RE = /(?:[A-Za-z]:[\\/]|\/)[^\s"'`)\]}]+/g;
+const ISO_TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}(?:[T ][0-9:.+\-Z]{2,})\b/g;
+const UUID_TOKEN_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+const LONG_NUMBER_TOKEN_RE = /\b\d{10,}\b/g;
+const VOLATILE_RUNTIME_KEY_RE = /\b(agent|session(?:_id)?|request(?:_id)?|thread(?:_id)?|conversation(?:_id)?|trace(?:_id)?|run(?:_id)?|job(?:_id)?|task(?:_id)?|sandbox(?:_id)?)=([^\s|,;]+)/gi;
+const PURE_VOLATILE_RUNTIME_KEY_RE = /\b(agent|session(?:_id)?|request(?:_id)?|thread(?:_id)?|conversation(?:_id)?|trace(?:_id)?|run(?:_id)?|job(?:_id)?|task(?:_id)?|sandbox(?:_id)?)=([^\s|,;]+)/i;
+const VOLATILE_METADATA_LINE_RE_LIST = [
+  /^(?:-?\s*)Current date:\s*.+$/i,
+  /^(?:-?\s*)Current time:\s*.+$/i,
+  /^(?:-?\s*)Today(?:'s)? date:\s*.+$/i,
+  /^(?:-?\s*)Request ID:\s*.+$/i,
+  /^(?:-?\s*)Session ID:\s*.+$/i,
+  /^(?:-?\s*)Thread ID:\s*.+$/i,
+  /^(?:-?\s*)Conversation ID:\s*.+$/i,
+  /^(?:-?\s*)Trace ID:\s*.+$/i,
+  /^(?:-?\s*)Run ID:\s*.+$/i,
+  /^(?:-?\s*)Job ID:\s*.+$/i,
+  /^(?:-?\s*)Task ID:\s*.+$/i,
+  /^(?:-?\s*)(?:Seen|Generated|Created|Updated)\s+at\b.*$/i,
+  /^(?:-?\s*)Timestamp:\s*.+$/i,
+];
+
+const VOLATILE_METADATA_LINE_PATTERNS: Array<{
+  pattern: RegExp;
+  placeholder: string;
+}> = [
+  { pattern: /^(-?\s*Current date:\s*).+$/gim, placeholder: "<CURRENT_DATE>" },
+  { pattern: /^(-?\s*Current time:\s*).+$/gim, placeholder: "<CURRENT_TIME>" },
+  { pattern: /^(-?\s*Today(?:'s)? date:\s*).+$/gim, placeholder: "<CURRENT_DATE>" },
+  { pattern: /^(-?\s*Request ID:\s*).+$/gim, placeholder: "<REQUEST_ID>" },
+  { pattern: /^(-?\s*Session ID:\s*).+$/gim, placeholder: "<SESSION_ID>" },
+  { pattern: /^(-?\s*Thread ID:\s*).+$/gim, placeholder: "<THREAD_ID>" },
+  { pattern: /^(-?\s*Conversation ID:\s*).+$/gim, placeholder: "<CONVERSATION_ID>" },
+  { pattern: /^(-?\s*Trace ID:\s*).+$/gim, placeholder: "<TRACE_ID>" },
+  { pattern: /^(-?\s*Run ID:\s*).+$/gim, placeholder: "<RUN_ID>" },
+  { pattern: /^(-?\s*Job ID:\s*).+$/gim, placeholder: "<JOB_ID>" },
+  { pattern: /^(-?\s*Task ID:\s*).+$/gim, placeholder: "<TASK_ID>" },
+  { pattern: /^(-?\s*(?:Seen|Generated|Created|Updated)\s+at\b\s*).+$/gim, placeholder: "<TIMESTAMP>" },
+  { pattern: /^(-?\s*Timestamp:\s*).+$/gim, placeholder: "<TIMESTAMP>" },
+];
 
 export function extractContentText(content: any): string {
   if (typeof content === "string") return content;
@@ -114,6 +153,114 @@ function stablePathTail(path: string, segments = 2): string {
   return parts.slice(-Math.min(parts.length, segments)).join("/");
 }
 
+function normalizeVolatileMetadataText(text: string): string {
+  let normalized = String(text ?? "");
+  for (const { pattern, placeholder } of VOLATILE_METADATA_LINE_PATTERNS) {
+    normalized = normalized.replace(pattern, (_match: string, prefix: string) => `${prefix}${placeholder}`);
+  }
+  normalized = normalized.replace(VOLATILE_RUNTIME_KEY_RE, (_match: string, key: string, value: string) => {
+    const rawValue = String(value ?? "").trim();
+    if (/^<[^>]+>$/.test(rawValue)) {
+      return `${key}=${rawValue}`;
+    }
+    const upperKey = String(key ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+    return `${key}=<${upperKey}>`;
+  });
+  normalized = normalized.replace(ISO_TIMESTAMP_RE, "<TIMESTAMP>");
+  normalized = normalized.replace(UUID_TOKEN_RE, "<UUID>");
+  normalized = normalized.replace(LONG_NUMBER_TOKEN_RE, "<LONG_NUMBER>");
+  return normalized;
+}
+
+function collapseExtraBlankLines(text: string): string {
+  return String(text ?? "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function isVolatileMetadataLine(line: string): boolean {
+  const trimmed = String(line ?? "").trim();
+  if (!trimmed) return false;
+  return VOLATILE_METADATA_LINE_RE_LIST.some((pattern) => pattern.test(trimmed));
+}
+
+function isPureVolatileKeyValueSegment(segment: string): boolean {
+  const trimmed = String(segment ?? "").trim();
+  if (!trimmed) return false;
+  const withoutLabel = trimmed.replace(/^[A-Za-z][A-Za-z0-9 _-]{0,32}:\s*/, "");
+  return withoutLabel
+    .split(/\s*\|\s*|\s*,\s*/)
+    .filter(Boolean)
+    .every((part) => PURE_VOLATILE_RUNTIME_KEY_RE.test(part.trim()) || /^[A-Za-z0-9_]+=<[^>]+>$/.test(part.trim()));
+}
+
+function isStableRuntimeHeaderSegment(segment: string): boolean {
+  const trimmed = String(segment ?? "").trim();
+  if (!trimmed) return false;
+  return /^Runtime:\s*agent=/i.test(trimmed) || /^Your working directory is:/i.test(trimmed);
+}
+
+function splitMixedVolatileLine(line: string): {
+  stableLine: string;
+  dynamicParts: string[];
+} | null {
+  const raw = String(line ?? "");
+  if (!raw.includes("|")) return null;
+  const segments = raw.split("|").map((segment) => segment.trim()).filter(Boolean);
+  if (segments.length < 2) return null;
+  const stableParts: string[] = [];
+  const dynamicParts: string[] = [];
+  for (const segment of segments) {
+    if (isStableRuntimeHeaderSegment(segment)) {
+      stableParts.push(segment);
+      continue;
+    }
+    if (isPureVolatileKeyValueSegment(segment) || isVolatileMetadataLine(segment)) {
+      dynamicParts.push(segment);
+    } else {
+      stableParts.push(segment);
+    }
+  }
+  if (dynamicParts.length === 0 || stableParts.length === 0) return null;
+  return {
+    stableLine: stableParts.join(" | "),
+    dynamicParts,
+  };
+}
+
+function extractVolatileDynamicLines(text: string): {
+  stableText: string;
+  dynamicLines: string[];
+} {
+  const dynamicLines: string[] = [];
+  const stableLines: string[] = [];
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      stableLines.push(line);
+      continue;
+    }
+    const mixed = splitMixedVolatileLine(trimmed);
+    if (mixed) {
+      stableLines.push(mixed.stableLine);
+      for (const part of mixed.dynamicParts) {
+        if (!dynamicLines.includes(part)) dynamicLines.push(part);
+      }
+      continue;
+    }
+    if (isVolatileMetadataLine(trimmed) || isPureVolatileKeyValueSegment(trimmed)) {
+      dynamicLines.push(trimmed);
+      continue;
+    }
+    stableLines.push(line);
+  }
+  return {
+    stableText: collapseExtraBlankLines(stableLines.join("\n")),
+    dynamicLines,
+  };
+}
+
 export function normalizeStablePrefixText(
   text: string,
   options?: {
@@ -124,7 +271,8 @@ export function normalizeStablePrefixText(
   const raw = String(text ?? "");
   if (!raw.trim()) return raw;
   const homeDir = options?.homeDir ?? process.env.HOME ?? process.env.USERPROFILE ?? "";
-  return raw.replace(ABSOLUTE_PATH_TOKEN_RE, (absolutePath: string, offset: number, source: string) => {
+  const withoutVolatileMetadata = normalizeVolatileMetadataText(raw);
+  return withoutVolatileMetadata.replace(ABSOLUTE_PATH_TOKEN_RE, (absolutePath: string, offset: number, source: string) => {
     const previousChar = offset > 0 ? source[offset - 1] : "";
     if (previousChar && /[A-Za-z0-9_.-]/.test(previousChar)) {
       return absolutePath;
@@ -217,8 +365,10 @@ export function rewriteTextForStablePrefix(promptText: string): StablePrefixText
   const runtimeAgentMatch = raw.match(/Runtime:\s*agent=([^|\n\r]+)/i);
   const workdir = workdirMatch?.[1]?.trim();
   const agentId = runtimeAgentMatch?.[1]?.trim();
+  const extracted = extractVolatileDynamicLines(raw);
+  const forwardedText = extracted.dynamicLines.length > 0 ? extracted.stableText : raw;
 
-  let canonical = raw;
+  let canonical = forwardedText;
   canonical = relocateToolingSectionToEnd(canonical);
   if (workdir) {
     canonical = canonical.split(workdir).join("<WORKDIR>");
@@ -248,13 +398,16 @@ export function rewriteTextForStablePrefix(promptText: string): StablePrefixText
   const dynamicLines: string[] = [];
   if (workdir) dynamicLines.push(`- WORKDIR: ${workdir}`);
   if (agentId) dynamicLines.push(`- AGENT_ID: ${agentId}`);
+  for (const line of extracted.dynamicLines) {
+    if (!dynamicLines.includes(line)) dynamicLines.push(line);
+  }
   const dynamicContextText = dynamicLines.join("\n");
 
   return {
     canonicalText: canonical,
-    forwardedText: raw,
+    forwardedText,
     dynamicContextText,
-    changed: canonical !== raw || dynamicContextText.length > 0,
+    changed: canonical !== raw || forwardedText !== raw || dynamicContextText.length > 0,
     workdir,
     agentId,
   };

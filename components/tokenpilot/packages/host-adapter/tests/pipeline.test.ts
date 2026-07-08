@@ -10,6 +10,7 @@ import { prepareBeforeCallWithReductionSummary } from "../src/pipeline/before-ca
 import { runBeforeCallReductionOrchestrator } from "../src/pipeline/reduction-orchestrator.js";
 import { stripInternalPayloadFields } from "../src/pipeline/recovery.js";
 import { prependTextToContent } from "../src/pipeline/message-text.js";
+import { rewriteTextForStablePrefix } from "../src/pipeline/message-text.js";
 import {
   applyStablePrefixToInstructions,
   applyStablePrefixToMessage,
@@ -504,6 +505,116 @@ test("normalizeStablePrefixText rewrites home, skill, and generic absolute paths
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
   }
+});
+
+test("normalizeStablePrefixText rewrites runtime ids, timestamps, and long numeric identifiers", () => {
+  const normalized = normalizeStablePrefixText(
+    [
+      "Current date: 2026-07-08",
+      "Request ID: req_12345678901234567890",
+      "Session ID: sess_12345678901234567890",
+      "Trace: request_id=req_12345678901234567890 | session_id=sess_12345678901234567890",
+      "Seen at 2026-07-05T10:11:12Z",
+      "Run UUID: 123e4567-e89b-12d3-a456-426614174000",
+      "Large token: 12345678901234567890",
+    ].join("\n"),
+  );
+
+  assert.match(normalized, /Current date: <CURRENT_DATE>/);
+  assert.match(normalized, /Request ID: <REQUEST_ID>/);
+  assert.match(normalized, /Session ID: <SESSION_ID>/);
+  assert.match(normalized, /request_id=<REQUEST_ID>/i);
+  assert.match(normalized, /session_id=<SESSION_ID>/i);
+  assert.match(normalized, /Seen at <TIMESTAMP>/);
+  assert.match(normalized, /Run UUID: <UUID>/);
+  assert.match(normalized, /Large token: <LONG_NUMBER>/);
+  assert.doesNotMatch(normalized, /123e4567-e89b-12d3-a456-426614174000/);
+  assert.doesNotMatch(normalized, /12345678901234567890/);
+});
+
+test("rewriteTextForStablePrefix stabilizes volatile metadata lines in canonical text only", () => {
+  const rewrite = rewriteTextForStablePrefix(
+    [
+      "Your working directory is: /repo/demo",
+      "Runtime: agent=worker-123 | mode=interactive | request_id=req_999999999999",
+      "Current date: 2026-07-08",
+      "Trace ID: trace_1234567890123",
+      "Seen at 2026-07-05T10:11:12Z",
+    ].join("\n"),
+  );
+
+  assert.match(rewrite.forwardedText, /worker-123/);
+  assert.doesNotMatch(rewrite.forwardedText, /2026-07-08/);
+  assert.match(rewrite.canonicalText, /agent=<AGENT_ID>/);
+  assert.doesNotMatch(rewrite.canonicalText, /request_id=/i);
+  assert.doesNotMatch(rewrite.canonicalText, /Current date:/);
+  assert.doesNotMatch(rewrite.canonicalText, /Trace ID:/);
+  assert.doesNotMatch(rewrite.canonicalText, /Seen at/);
+  assert.match(rewrite.dynamicContextText, /WORKDIR: \/repo\/demo/);
+  assert.match(rewrite.dynamicContextText, /AGENT_ID: worker-123/);
+  assert.match(rewrite.dynamicContextText, /request_id=req_999999999999/i);
+  assert.match(rewrite.dynamicContextText, /Current date: 2026-07-08/);
+  assert.match(rewrite.dynamicContextText, /Trace ID: trace_1234567890123/);
+  assert.match(rewrite.dynamicContextText, /Seen at 2026-07-05T10:11:12Z/);
+});
+
+test("rewriteTextForStablePrefix moves obvious dynamic metadata lines out of forwarded stable text", () => {
+  const rewrite = rewriteTextForStablePrefix(
+    [
+      "System bootstrap.",
+      "Your working directory is: /repo/demo",
+      "Runtime: agent=worker-123 | mode=interactive",
+      "Current date: 2026-07-08",
+      "Request ID: req_12345678901234567890",
+      "Seen at 2026-07-05T10:11:12Z",
+      "Repository policy: keep commits small.",
+    ].join("\n"),
+  );
+
+  assert.match(rewrite.forwardedText, /System bootstrap\./);
+  assert.match(rewrite.forwardedText, /Repository policy: keep commits small\./);
+  assert.doesNotMatch(rewrite.forwardedText, /Current date:/);
+  assert.doesNotMatch(rewrite.forwardedText, /Request ID:/);
+  assert.doesNotMatch(rewrite.forwardedText, /Seen at 2026-07-05T10:11:12Z/);
+  assert.match(rewrite.dynamicContextText, /Current date: 2026-07-08/);
+  assert.match(rewrite.dynamicContextText, /Request ID: req_12345678901234567890/);
+  assert.match(rewrite.dynamicContextText, /Seen at 2026-07-05T10:11:12Z/);
+});
+
+test("rewriteTextForStablePrefix splits mixed stable and volatile runtime lines", () => {
+  const rewrite = rewriteTextForStablePrefix(
+    [
+      "System bootstrap.",
+      "Runtime: agent=worker-123 | mode=interactive | request_id=req_12345678901234567890 | trace_id=trace_12345678901234567890",
+      "Your working directory is: /repo/demo",
+      "Repository policy: keep commits small.",
+    ].join("\n"),
+  );
+
+  assert.match(rewrite.forwardedText, /Runtime: agent=worker-123 \| mode=interactive/);
+  assert.doesNotMatch(rewrite.forwardedText, /request_id=/i);
+  assert.doesNotMatch(rewrite.forwardedText, /trace_id=/i);
+  assert.match(rewrite.canonicalText, /Runtime: agent=<AGENT_ID> \| mode=interactive/);
+  assert.doesNotMatch(rewrite.canonicalText, /request_id=/i);
+  assert.doesNotMatch(rewrite.canonicalText, /trace_id=/i);
+  assert.match(rewrite.dynamicContextText, /request_id=req_12345678901234567890/i);
+  assert.match(rewrite.dynamicContextText, /trace_id=trace_12345678901234567890/i);
+});
+
+test("rewriteTextForStablePrefix does not strip ordinary business text that merely contains dates, ids, or large numbers", () => {
+  const rewrite = rewriteTextForStablePrefix(
+    [
+      "Release note: version 20260708001 adds 12000000000 cached rows for benchmark parity.",
+      "User-facing copy: session_id is shown literally in docs and should not be moved unless it is metadata.",
+      "The deadline is 2026-07-08 for the migration guide.",
+    ].join("\n"),
+  );
+
+  assert.match(rewrite.forwardedText, /version 20260708001 adds 12000000000 cached rows/i);
+  assert.match(rewrite.forwardedText, /session_id is shown literally in docs/i);
+  assert.match(rewrite.forwardedText, /deadline is 2026-07-08/i);
+  assert.equal(rewrite.dynamicContextText, "");
+  assert.match(rewrite.canonicalText, /Release note: version <LONG_NUMBER> adds <LONG_NUMBER> cached rows/i);
 });
 
 test("extractStablePrefixContract normalizes absolute paths inside tools", () => {
