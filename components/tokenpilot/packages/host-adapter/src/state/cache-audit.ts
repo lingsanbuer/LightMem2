@@ -13,6 +13,8 @@ import {
 } from "../contracts/stable-prefix-audit.js";
 import type { HostRequestEnvelope } from "../model/host-request.js";
 
+export type CacheAuditBaselineKind = "identity" | "request_key" | "session" | "none";
+
 export type CacheAuditRecord = {
   at: string;
   sessionId: string;
@@ -22,11 +24,13 @@ export type CacheAuditRecord = {
   stablePrefix: ReturnType<typeof serializeStablePrefixContract>;
   entropyFindings: ReturnType<typeof auditStablePrefixEntropy>;
   driftReasons: ReturnType<typeof diffStablePrefixSerialized>;
+  originalRequestPromptCacheKey: string | null;
   requestPromptCacheKey: string | null;
   responsePromptCacheKey: string | null;
   cachedInputTokens: number;
   usage: Record<string, unknown> | null;
   status: number;
+  baselineKind?: CacheAuditBaselineKind;
 };
 
 export type CacheAuditSnapshot = Omit<
@@ -63,6 +67,10 @@ export type CacheAuditSummary = {
 
 function cacheAuditPath(stateDir: string): string {
   return join(stateDir, "cache-audit.jsonl");
+}
+
+function cacheAuditSessionPath(stateDir: string, sessionId: string): string {
+  return join(stateDir, "cache-audit-sessions", `${encodeURIComponent(sessionId)}.jsonl`);
 }
 
 function isCacheAuditRecord(value: unknown): value is CacheAuditRecord {
@@ -117,6 +125,12 @@ export async function readRecentCacheAuditRecordsForSession<T extends CacheAudit
 ): Promise<T[]> {
   const target = String(sessionId ?? "").trim();
   if (!target) return [];
+  const sessionRecords = await readRecentJsonlEntries<T>(
+    cacheAuditSessionPath(stateDir, target),
+    Math.max(1, limit),
+    (value): value is T => isCacheAuditRecord(value),
+  );
+  if (sessionRecords.length > 0) return sessionRecords;
   const records = await readRecentJsonlEntries<T>(
     cacheAuditPath(stateDir),
     Number.MAX_SAFE_INTEGER,
@@ -185,6 +199,7 @@ export function buildCacheAuditSnapshot(params: {
   sessionId: string;
   model: string;
   stream: boolean;
+  originalRequestPromptCacheKey?: string | null;
   requestPromptCacheKey?: string | null;
 }): CacheAuditSnapshot {
   const stablePrefixContract = extractStablePrefixContract(params.envelope);
@@ -197,6 +212,10 @@ export function buildCacheAuditSnapshot(params: {
     stablePrefix: serialized,
     entropyFindings: auditStablePrefixEntropy(serialized),
     driftReasons: [],
+    originalRequestPromptCacheKey:
+      typeof params.originalRequestPromptCacheKey === "string" && params.originalRequestPromptCacheKey.trim()
+        ? params.originalRequestPromptCacheKey
+        : null,
     requestPromptCacheKey: typeof params.requestPromptCacheKey === "string" && params.requestPromptCacheKey.trim()
       ? params.requestPromptCacheKey
       : null,
@@ -213,14 +232,32 @@ export async function appendCacheAuditRecord<T extends CacheAuditRecord>(params:
   await mkdir(params.stateDir, { recursive: true });
   const previousEntries = await readRecentCacheAuditRecords<T>(params.stateDir, 32);
   const identity = cacheIdentity(params.snapshot);
-  const previous = previousEntries.find((entry) => {
-    if (identity) return cacheIdentity(entry) === identity;
-    return entry.sessionId === params.snapshot.sessionId;
+  const previousByIdentity = previousEntries.find((entry) => {
+    if (!identity) return false;
+    return cacheIdentity(entry) === identity;
   });
+  const normalizedRequestPromptCacheKey = params.snapshot.requestPromptCacheKey?.trim() || "";
+  const previousByRequestPromptCacheKey = normalizedRequestPromptCacheKey
+    ? previousEntries.find((entry) => entry.requestPromptCacheKey?.trim() === normalizedRequestPromptCacheKey)
+    : undefined;
+  const previousBySession = previousEntries.find((entry) => entry.sessionId === params.snapshot.sessionId);
+  const previous = previousByIdentity
+    ?? previousByRequestPromptCacheKey
+    ?? (normalizedRequestPromptCacheKey ? undefined : previousBySession);
+  const baselineKind: CacheAuditBaselineKind =
+    previousByIdentity
+      ? "identity"
+      : previousByRequestPromptCacheKey
+        ? "request_key"
+        : previous
+          ? "session"
+          : "none";
   const record = {
     at: new Date().toISOString(),
     ...params.snapshot,
-    driftReasons: diffStablePrefixSerialized(previous?.stablePrefix, params.snapshot.stablePrefix),
+    driftReasons: previous
+      ? diffStablePrefixSerialized(previous.stablePrefix, params.snapshot.stablePrefix)
+      : [],
     responsePromptCacheKey:
       typeof params.responsePromptCacheKey === "string" && params.responsePromptCacheKey.trim()
         ? params.responsePromptCacheKey
@@ -228,7 +265,11 @@ export async function appendCacheAuditRecord<T extends CacheAuditRecord>(params:
     cachedInputTokens: readCachedInputTokens(params.usage),
     usage: params.usage ?? null,
     status: params.status,
+    baselineKind,
   } satisfies CacheAuditRecord;
-  await appendJsonl(cacheAuditPath(params.stateDir), record);
+  await Promise.all([
+    appendJsonl(cacheAuditPath(params.stateDir), record),
+    appendJsonl(cacheAuditSessionPath(params.stateDir, params.snapshot.sessionId), record),
+  ]);
   return record as T;
 }

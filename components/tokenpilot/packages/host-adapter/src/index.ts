@@ -34,6 +34,7 @@ export * from "./state/session-store.js";
 export * from "./state/trace-store.js";
 export * from "./state/cache-usage.js";
 export * from "./state/cache-audit.js";
+export * from "./state/cache-audit-diagnosis.js";
 export * from "./state/token-counter.js";
 export * from "./state/ux-store.js";
 export * from "./testing/host-e2e.js";
