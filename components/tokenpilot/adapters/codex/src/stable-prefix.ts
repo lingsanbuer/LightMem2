@@ -199,11 +199,13 @@ export function prepareCodexStablePrefix(
     rootRewrite?.canonicalText ?? candidate?.text ?? "",
   ]);
   const nextPromptCacheKey = computeStablePromptCacheKey(envelope.model, stablePromptParts);
+  const outboundPromptCacheKey = originalPromptCacheKey || nextPromptCacheKey;
 
   const nextMetadata = {
     ...(rewrittenEnvelope.metadata ?? {}),
     originalPromptCacheKey,
-    promptCacheKey: nextPromptCacheKey,
+    frameworkStablePromptCacheKey: nextPromptCacheKey,
+    promptCacheKey: outboundPromptCacheKey,
     promptCacheRetention: "24h",
   };
 

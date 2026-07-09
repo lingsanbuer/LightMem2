@@ -326,7 +326,7 @@ test("prepareCodexStablePrefix injects merged dynamic context into first user me
   assert.match(String(prepared.messages[1]?.content ?? ""), /please inspect the repo/);
 });
 
-test("prepareCodexStablePrefix overrides inbound prompt_cache_key when one is already present", () => {
+test("prepareCodexStablePrefix preserves inbound prompt_cache_key for runtime forwarding", () => {
   const config = normalizeTokenPilotCodexConfig({
     hooks: {
       dynamicContextTarget: "developer",
@@ -366,12 +366,13 @@ test("prepareCodexStablePrefix overrides inbound prompt_cache_key when one is al
     },
   }, config);
 
-  assert.match(String(prepared.metadata?.promptCacheKey ?? ""), /^lightmem2-codex-/);
-  assert.notEqual(prepared.metadata?.promptCacheKey, "upstream-existing-key");
+  assert.equal(prepared.metadata?.promptCacheKey, "upstream-existing-key");
+  assert.match(String(prepared.metadata?.frameworkStablePromptCacheKey ?? ""), /^lightmem2-codex-/);
+  assert.equal(prepared.metadata?.originalPromptCacheKey, "upstream-existing-key");
   assert.equal(prepared.metadata?.promptCacheRetention, "24h");
 });
 
-test("prepareCodexStablePrefix converges different inbound prompt_cache_key values onto the same stable key", () => {
+test("prepareCodexStablePrefix keeps inbound runtime keys while converging framework stable keys", () => {
   const config = normalizeTokenPilotCodexConfig({
     hooks: {
       dynamicContextTarget: "developer",
@@ -414,6 +415,11 @@ test("prepareCodexStablePrefix converges different inbound prompt_cache_key valu
   const preparedA = prepareCodexStablePrefix(makeEnvelope("legacy-key-a"), config);
   const preparedB = prepareCodexStablePrefix(makeEnvelope("legacy-key-b"), config);
 
-  assert.equal(preparedA.metadata?.promptCacheKey, preparedB.metadata?.promptCacheKey);
-  assert.match(String(preparedA.metadata?.promptCacheKey ?? ""), /^lightmem2-codex-/);
+  assert.equal(preparedA.metadata?.promptCacheKey, "legacy-key-a");
+  assert.equal(preparedB.metadata?.promptCacheKey, "legacy-key-b");
+  assert.equal(
+    preparedA.metadata?.frameworkStablePromptCacheKey,
+    preparedB.metadata?.frameworkStablePromptCacheKey,
+  );
+  assert.match(String(preparedA.metadata?.frameworkStablePromptCacheKey ?? ""), /^lightmem2-codex-/);
 });

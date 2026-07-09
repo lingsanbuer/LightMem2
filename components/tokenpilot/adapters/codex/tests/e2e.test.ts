@@ -504,7 +504,7 @@ test("Codex cold and warm requests expose prompt cache hit usage when stable pre
       const bodyB = await responseB.json() as Record<string, unknown>;
       assert.equal(typeof upstream.requests[0]?.prompt_cache_key, "string");
       assert.equal(upstream.requests[0]?.prompt_cache_key, upstream.requests[1]?.prompt_cache_key);
-      assert.notEqual(upstream.requests[0]?.prompt_cache_key, "pk-codex-warm-session-1");
+      assert.equal(upstream.requests[0]?.prompt_cache_key, "pk-codex-warm-session-1");
       assertColdWarmCacheUsage([bodyA.usage, bodyB.usage]);
 
       const sessions = await readVisualSessionList(stateDir);
@@ -535,7 +535,7 @@ test("Codex cold and warm requests expose prompt cache hit usage when stable pre
   });
 });
 
-test("Codex rewrites different inbound prompt_cache_key values to the same stable upstream key", async () => {
+test("Codex preserves different inbound prompt_cache_key values upstream while audit still tracks the same stable request family", async () => {
   await withTempHome("lightmem2-codex-force-key-rewrite-", async (homeDir) => {
     const proxyPort = await reserveUnusedPort();
     const stateDir = join(homeDir, ".codex", "tokenpilot-state", "tokenpilot");
@@ -624,9 +624,8 @@ test("Codex rewrites different inbound prompt_cache_key values to the same stabl
       assert.equal(responseA.status, 200);
       assert.equal(responseB.status, 200);
       assert.equal(typeof upstream.requests[0]?.prompt_cache_key, "string");
-      assert.equal(upstream.requests[0]?.prompt_cache_key, upstream.requests[1]?.prompt_cache_key);
-      assert.notEqual(upstream.requests[0]?.prompt_cache_key, "legacy-key-a");
-      assert.notEqual(upstream.requests[1]?.prompt_cache_key, "legacy-key-b");
+      assert.equal(upstream.requests[0]?.prompt_cache_key, "legacy-key-a");
+      assert.equal(upstream.requests[1]?.prompt_cache_key, "legacy-key-b");
     } finally {
       await runtime.close();
       await upstream.close();
@@ -758,7 +757,7 @@ test("Codex requests reuse synth sessions through prompt_cache_key when previous
         assert.equal(bindings[1]?.responseId, "resp-pk-2");
         assert.equal(typeof requests[0]?.prompt_cache_key, "string");
         assert.equal(requests[0]?.prompt_cache_key, requests[1]?.prompt_cache_key);
-        assert.notEqual(requests[0]?.prompt_cache_key, "pk-codex-session-1");
+        assert.equal(requests[0]?.prompt_cache_key, "pk-codex-session-1");
       } finally {
         await runtime.close();
       }

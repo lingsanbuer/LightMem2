@@ -228,8 +228,10 @@ export async function startCodexResponsesProxy(params: {
             ? prepared.envelope.metadata.originalPromptCacheKey
             : null,
         requestPromptCacheKey:
-          typeof prepared.envelope.metadata?.promptCacheKey === "string"
-            ? prepared.envelope.metadata.promptCacheKey
+          typeof prepared.envelope.metadata?.frameworkStablePromptCacheKey === "string"
+            ? prepared.envelope.metadata.frameworkStablePromptCacheKey
+            : typeof prepared.envelope.metadata?.promptCacheKey === "string"
+              ? prepared.envelope.metadata.promptCacheKey
             : null,
       });
 

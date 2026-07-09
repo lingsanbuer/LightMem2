@@ -146,7 +146,11 @@ export function buildStabilityVisualSnapshotFromEnvelopes(params: {
     model: params.model,
     upstreamModel: params.upstreamModel,
     promptCacheKeyBefore: String(params.originalEnvelope.metadata?.promptCacheKey ?? ""),
-    promptCacheKeyAfter: String(params.preparedEnvelope.metadata?.promptCacheKey ?? ""),
+    promptCacheKeyAfter: String(
+      params.preparedEnvelope.metadata?.frameworkStablePromptCacheKey
+      ?? params.preparedEnvelope.metadata?.promptCacheKey
+      ?? "",
+    ),
     dynamicContextTarget: params.dynamicContextTarget,
     developerBefore: params.getDeveloperText(params.originalEnvelope),
     developerForwarded: params.developerForwarded ?? params.getDeveloperText(params.preparedEnvelope),

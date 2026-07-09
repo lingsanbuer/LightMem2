@@ -126,7 +126,7 @@ test("claude request path canonicalizes tools before encode", async () => {
   assert.deepEqual(Object.keys(encoded.tools[1]?.input_schema?.properties ?? {}), ["a", "z"]);
 });
 
-test("claude stable prefix rewrites inbound prompt_cache_key before encode", () => {
+test("claude stable prefix preserves inbound prompt_cache_key for encode while storing framework stable key", () => {
   const codec = createClaudeMessagesPayloadCodec();
   const request = codec.decodeRequest({
     model: "claude-sonnet-4-6",
@@ -150,6 +150,7 @@ test("claude stable prefix rewrites inbound prompt_cache_key before encode", () 
   const encoded = codec.encodeRequest(prepared) as Record<string, unknown>;
 
   assert.equal(typeof encoded.prompt_cache_key, "string");
-  assert.notEqual(encoded.prompt_cache_key, "legacy-key-a");
-  assert.match(String(encoded.prompt_cache_key ?? ""), /^lightmem2-claude-/);
+  assert.equal(encoded.prompt_cache_key, "legacy-key-a");
+  assert.match(String(prepared.metadata?.frameworkStablePromptCacheKey ?? ""), /^lightmem2-claude-/);
+  assert.equal(prepared.metadata?.originalPromptCacheKey, "legacy-key-a");
 });

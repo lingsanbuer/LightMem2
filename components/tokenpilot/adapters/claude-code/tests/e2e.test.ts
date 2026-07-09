@@ -374,7 +374,7 @@ test("Claude Code cold and warm requests expose prompt cache hit usage when stab
   });
 });
 
-test("Claude Code rewrites different inbound prompt_cache_key values to the same stable upstream key", async () => {
+test("Claude Code preserves different inbound prompt_cache_key values upstream while audit still tracks the same stable request family", async () => {
   await withTempHome("lightmem2-claude-force-key-rewrite-", async (homeDir) => {
     const proxyPort = await reserveUnusedPort();
     const stateDir = join(homeDir, ".claude", "tokenpilot-state", "tokenpilot");
@@ -464,9 +464,8 @@ test("Claude Code rewrites different inbound prompt_cache_key values to the same
       assert.equal(responseA.status, 200);
       assert.equal(responseB.status, 200);
       assert.equal(typeof upstream.requests[0]?.prompt_cache_key, "string");
-      assert.equal(upstream.requests[0]?.prompt_cache_key, upstream.requests[1]?.prompt_cache_key);
-      assert.notEqual(upstream.requests[0]?.prompt_cache_key, "legacy-key-a");
-      assert.notEqual(upstream.requests[1]?.prompt_cache_key, "legacy-key-b");
+      assert.equal(upstream.requests[0]?.prompt_cache_key, "legacy-key-a");
+      assert.equal(upstream.requests[1]?.prompt_cache_key, "legacy-key-b");
     } finally {
       await runtime.close();
       await upstream.close();

@@ -1004,7 +1004,7 @@ test("gateway runtime reuses the same Claude prompt_cache_key for the same stabl
   }
 });
 
-test("gateway runtime overrides inbound Claude prompt_cache_key and converges legacy keys for the same stable prefix", async () => {
+test("gateway runtime preserves inbound Claude prompt_cache_key while converging framework stable keys for diagnostics", async () => {
   const dir = await mkdtemp(join(tmpdir(), "lightmem2-claude-gateway-force-cache-key-"));
   const proxyPort = await reserveUnusedPort();
   const seenPayloads: Record<string, unknown>[] = [];
@@ -1068,9 +1068,8 @@ test("gateway runtime overrides inbound Claude prompt_cache_key and converges le
 
     assert.equal(seenPayloads.length, 2);
     assert.equal(typeof seenPayloads[0]?.prompt_cache_key, "string");
-    assert.equal(seenPayloads[0]?.prompt_cache_key, seenPayloads[1]?.prompt_cache_key);
-    assert.notEqual(seenPayloads[0]?.prompt_cache_key, "legacy-key-a");
-    assert.notEqual(seenPayloads[1]?.prompt_cache_key, "legacy-key-b");
+    assert.equal(seenPayloads[0]?.prompt_cache_key, "legacy-key-a");
+    assert.equal(seenPayloads[1]?.prompt_cache_key, "legacy-key-b");
   } finally {
     await runtime.close();
     await rm(dir, { recursive: true, force: true });

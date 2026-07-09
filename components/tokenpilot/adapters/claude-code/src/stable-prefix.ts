@@ -58,7 +58,11 @@ export function prepareClaudeStablePrefix(
     rootCandidate?.text ?? "",
   ];
   const nextPromptCacheKey = computeStablePromptCacheKey(prepared.model, stablePromptParts);
-  if (nextPromptCacheKey === prepared.metadata?.promptCacheKey) {
+  const outboundPromptCacheKey = originalPromptCacheKey || nextPromptCacheKey;
+  if (
+    outboundPromptCacheKey === prepared.metadata?.promptCacheKey
+    && nextPromptCacheKey === prepared.metadata?.frameworkStablePromptCacheKey
+  ) {
     return prepared;
   }
   return {
@@ -66,7 +70,8 @@ export function prepareClaudeStablePrefix(
     metadata: {
       ...(prepared.metadata ?? {}),
       originalPromptCacheKey,
-      promptCacheKey: nextPromptCacheKey,
+      frameworkStablePromptCacheKey: nextPromptCacheKey,
+      promptCacheKey: outboundPromptCacheKey,
     },
   };
 }
