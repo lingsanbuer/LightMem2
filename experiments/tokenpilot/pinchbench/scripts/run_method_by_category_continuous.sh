@@ -118,12 +118,19 @@ setup_category_runtime() {
   local index="$2"
   local category_slug
   category_slug="$(printf '%s' "${category}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '-')"
+  local run_tag_compact
+  local profile_suffix
+  run_tag_compact="$(printf '%s' "${RUN_TAG}" | tr -cd 'a-zA-Z0-9' | tail -c 13)"
+  profile_suffix="$(printf '%s' "${category_slug}" | tr -cd 'a-zA-Z0-9' | head -c 12)"
+  if [[ -z "${profile_suffix}" ]]; then
+    profile_suffix="cat${index}"
+  fi
 
   CATEGORY_TMP_ROOT="${TMP_ROOT_BASE}/${RUN_TAG}/${category_slug}"
   CATEGORY_OPENCLAW_HOME="${CATEGORY_TMP_ROOT}/openclaw_home"
   CATEGORY_OPENCLAW_CFG="${CATEGORY_OPENCLAW_HOME}/.openclaw/openclaw.json"
   CATEGORY_OPENCLAW_STATE_DIR="${CATEGORY_OPENCLAW_HOME}/.openclaw"
-  CATEGORY_OPENCLAW_PROFILE="pinchbench-by-category-${RUN_TAG}-${category_slug}"
+  CATEGORY_OPENCLAW_PROFILE="pbc_${run_tag_compact}_${profile_suffix}"
   CATEGORY_GATEWAY_PORT="$((BASE_GATEWAY_PORT + index))"
   CATEGORY_PROXY_PORT="$((BASE_PROXY_PORT + index))"
   CATEGORY_FWS_DATA_DIR="${CATEGORY_TMP_ROOT}/fws-shared"
