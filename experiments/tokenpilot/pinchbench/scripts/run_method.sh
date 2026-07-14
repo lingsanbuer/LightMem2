@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PINCHBENCH_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CALLER_PWD="$(pwd -P)"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 
@@ -104,6 +105,17 @@ RESOLVED_PARALLEL="${PARALLEL:-${TOKENPILOT_PARALLEL:-1}}"
 RESOLVED_SESSION_MODE="${SESSION_MODE:-${TOKENPILOT_SESSION_MODE:-isolated}}"
 
 OUTPUT_DIR="${OUTPUT_DIR_OVERRIDE:-${PINCHBENCH_ROOT}/save/${RESOLVED_SESSION_MODE}/method/raw}"
+if [[ "${OUTPUT_DIR}" != /* ]]; then
+  OUTPUT_DIR="$(python3 - "${CALLER_PWD}" "${OUTPUT_DIR}" <<'PY'
+import os
+import sys
+
+base_dir = sys.argv[1]
+output_dir = sys.argv[2]
+print(os.path.abspath(os.path.join(base_dir, output_dir)))
+PY
+)"
+fi
 LOG_DIR="${PINCHBENCH_ROOT}/save/logs"
 REPORT_DIR="${PINCHBENCH_ROOT}/save/reports"
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
@@ -120,10 +132,11 @@ export PINCHBENCH_EVAL_JSONL_FILE="${EVAL_JSONL_FILE}"
 
 PLUGIN_STATE_DIR="$(resolve_plugin_state_dir)"
 PLUGIN_TRACE_FILE="${PLUGIN_STATE_DIR}/task-state/trace.jsonl"
-GATEWAY_LOG_FILE="/tmp/openclaw_gateway.log"
+GATEWAY_LOG_FILE="${PINCHBENCH_GATEWAY_LOG_FILE:-/tmp/openclaw_gateway.log}"
 TRACE_TAIL_PID=""
 GATEWAY_TAIL_PID=""
 LIVE_DEBUG_STDOUT="${TOKENPILOT_LIVE_DEBUG_STDOUT:-false}"
+ENABLE_LIVE_DEBUG_TAILS="${TOKENPILOT_ENABLE_LIVE_DEBUG_TAILS:-false}"
 
 cleanup_live_debug_tails() {
   if [[ -n "${TRACE_TAIL_PID}" ]]; then
@@ -140,6 +153,18 @@ cleanup_live_debug_tails() {
 
 run_method_exit_cleanup() {
   cleanup_live_debug_tails
+  if [[ "${PINCHBENCH_CLEANUP_ISOLATED_SERVICES:-false}" =~ ^(true|1|yes)$ ]]; then
+    local port
+    for port in "${TOKENPILOT_GATEWAY_PORT:-}" "${PINCHBENCH_FWS_PORT:-}"; do
+      [[ "${port}" =~ ^[0-9]+$ ]] || continue
+      # Each benchmark worker owns a unique gateway/FWS port block. Releasing
+      # it here also releases the OpenClaw file watchers before the next lane.
+      fuser -k -TERM "${port}/tcp" >/dev/null 2>&1 || true
+      if [[ "${port}" == "${PINCHBENCH_FWS_PORT:-}" ]]; then
+        fuser -k -TERM "$((port + 1))/tcp" >/dev/null 2>&1 || true
+      fi
+    done
+  fi
 }
 
 start_live_debug_tails() {
@@ -225,9 +250,11 @@ if [[ "${PHASE}" == "eval" ]]; then
     --judge "${RESOLVED_JUDGE}" \
     2>&1 | tee "${RUN_LOG_FILE}"
 else
-  log_runtime_step "start_live_debug_tails:start"
-  start_live_debug_tails
-  log_runtime_step "start_live_debug_tails:done"
+  if [[ "${ENABLE_LIVE_DEBUG_TAILS}" =~ ^(true|1|yes)$ ]]; then
+    log_runtime_step "start_live_debug_tails:start"
+    start_live_debug_tails
+    log_runtime_step "start_live_debug_tails:done"
+  fi
   log_runtime_step "benchmark.py:start"
   uv run scripts/benchmark.py "${BENCH_ARGS[@]}" 2>&1 | tee "${RUN_LOG_FILE}"
   log_runtime_step "benchmark.py:done"
